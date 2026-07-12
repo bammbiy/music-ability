@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Music Ability Dashboard</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body>
+    <main class="shell dashboard">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Music Ability</p>
+          <h1>내 음악 취향 분석</h1>
+        </div>
+        <a class="button secondary" href="/">처음으로</a>
+      </header>
+
+      <section class="result-grid">
+        <article class="panel score-panel">
+          <span class="label">음악력 점수</span>
+          <strong id="score">--</strong>
+          <p id="summary">분석을 준비하는 중입니다.</p>
+        </article>
+
+        <article class="panel metrics-panel">
+          <span class="label">취향 지표</span>
+          <div id="metrics" class="metrics"></div>
+        </article>
+
+        <article class="panel wide">
+          <span class="label">장르 평균</span>
+          <div id="buckets" class="bars"></div>
+        </article>
+
+        <article class="panel wide">
+          <span class="label">세부 장르</span>
+          <div id="genres" class="chips"></div>
+        </article>
+
+        <article class="panel">
+          <span class="label">상위 트랙</span>
+          <div id="tracks" class="rank-list"></div>
+        </article>
+
+        <article class="panel">
+          <span class="label">큐레이터 매칭</span>
+          <div id="critics" class="rank-list"></div>
+        </article>
+      </section>
+    </main>
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

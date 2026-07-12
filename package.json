@@ -1,0 +1,13 @@
+{
+  "name": "music-ability",
+  "version": "0.1.0",
+  "description": "Spotify-based music taste and music ability profile MVP.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/app.js",
+    "check": "node --check server/app.js && node --check public/js/app.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
