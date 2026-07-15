@@ -37,8 +37,9 @@ function render() {
 function renderMetrics(metrics) {
   const labels = {
     diversity: "장르 다양성",
-    detailDepth: "세부 장르 깊이",
+    detailDepth: "감상 깊이",
     discovery: "발견 성향",
+    concentration: "취향 확장성",
     mainstream: "대중성"
   };
 

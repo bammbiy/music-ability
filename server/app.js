@@ -67,6 +67,14 @@ const server = http.createServer(async (req, res) => {
       return handleAnalysis(req, res, url);
     }
 
+    if (url.pathname === "/api/consent" && req.method === "POST") {
+      return handleConsent(req, res);
+    }
+
+    if (url.pathname === "/api/account/disconnect" && req.method === "POST") {
+      return handleDisconnect(req, res);
+    }
+
     return serveStatic(res, url.pathname);
   } catch (error) {
     console.error(error);
@@ -190,6 +198,7 @@ async function handleAnalysis(req, res, url) {
 
   const dataset = {
     source: "spotify",
+    provider: "spotify",
     generatedAt: new Date().toISOString(),
     artists: [...artistById.values()],
     tracks: (topTracks.items || []).map((track) => normalizeTrack(track, artistById)),
@@ -197,6 +206,22 @@ async function handleAnalysis(req, res, url) {
   };
 
   return sendJson(res, buildAnalysis(dataset));
+}
+
+function handleConsent(req, res) {
+  const session = getSession(req);
+  if (!session) return sendJson(res, { error: "not_authenticated" }, 401);
+
+  session.analysisConsent = true;
+  session.consentAt = new Date().toISOString();
+  return sendJson(res, { consented: true, consentAt: session.consentAt });
+}
+
+function handleDisconnect(req, res) {
+  const session = getSession(req);
+  if (session) sessions.delete(session.id);
+  res.setHeader("Set-Cookie", "ma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+  return sendJson(res, { disconnected: true, deleted: true });
 }
 
 async function hydrateArtistGenres(session, artistById, missingArtists) {
@@ -282,10 +307,11 @@ function buildAnalysis(dataset) {
   const topArtists = rankMap(artistWeights).slice(0, 8);
   const avgPopularity = average(tracks.map((track) => track.popularity).filter(Number.isFinite));
   const mainstream = Math.round(avgPopularity || average(artists.map((artist) => artist.popularity).filter(Number.isFinite)) || 50);
-  const diversity = Math.min(100, Math.round(genres.length * 7 + buckets.length * 9));
-  const detailDepth = Math.min(100, Math.round(genres.filter((genre) => genre.name.includes(" ") || genre.name.includes("-")).length * 12));
-  const discovery = Math.max(0, Math.min(100, 100 - mainstream + Math.round(diversity * 0.35)));
-  const score = Math.round(diversity * 0.35 + detailDepth * 0.25 + discovery * 0.2 + (100 - Math.abs(60 - mainstream)) * 0.2);
+  const diversity = diversityScore(bucketWeights, genreWeights);
+  const detailDepth = depthScore(tracks, genres);
+  const discovery = discoveryScore(tracks, artists, mainstream);
+  const concentration = concentrationScore(artistWeights);
+  const score = Math.round(diversity * 0.3 + detailDepth * 0.25 + discovery * 0.25 + concentration * 0.2);
 
   return {
     source: dataset.source,
@@ -295,7 +321,9 @@ function buildAnalysis(dataset) {
       diversity,
       detailDepth,
       discovery,
-      mainstream
+      concentration,
+      mainstream,
+      label: scoreLabel(score)
     },
     buckets: withPercent(buckets).slice(0, 8),
     genres: withPercent(genres).slice(0, 12),
@@ -306,9 +334,52 @@ function buildAnalysis(dataset) {
       image: track.image,
       popularity: track.popularity
     })),
-    summary: buildSummary(score, buckets, genres, mainstream),
+    summary: buildSummary(score, buckets, genres, mainstream, concentration),
     criticMatches: buildCriticMatches(genres, buckets)
   };
+}
+
+function diversityScore(bucketWeights, genreWeights) {
+  const bucketEntropy = normalizedEntropy([...bucketWeights.values()]);
+  const genreEntropy = normalizedEntropy([...genreWeights.values()]);
+  return Math.round(bucketEntropy * 0.55 + genreEntropy * 0.45);
+}
+
+function depthScore(tracks, genres) {
+  const detailedGenres = genres.filter((genre) => genre.name.includes(" ") || genre.name.includes("-")).length;
+  const albums = new Set(tracks.map((track) => track.album).filter(Boolean)).size;
+  return Math.round(Math.min(100, detailedGenres * 10) * 0.6 + Math.min(100, albums * 8) * 0.4);
+}
+
+function discoveryScore(tracks, artists, mainstream) {
+  const uniqueArtists = new Set(tracks.flatMap((track) => (track.artists || []).map((artist) => artist.name))).size;
+  const artistPart = Math.min(100, uniqueArtists * 12);
+  return Math.max(0, Math.min(100, Math.round(artistPart * 0.55 + (100 - mainstream) * 0.45)));
+}
+
+function concentrationScore(artistWeights) {
+  const values = [...artistWeights.values()];
+  if (values.length < 2) return values.length === 1 ? 25 : 50;
+  const total = values.reduce((sum, value) => sum + value, 0) || 1;
+  const topShare = Math.max(...values) / total;
+  return Math.round(Math.max(0, Math.min(100, 100 - topShare * 100)));
+}
+
+function normalizedEntropy(values) {
+  if (values.length <= 1) return values.length ? 25 : 0;
+  const total = values.reduce((sum, value) => sum + value, 0) || 1;
+  const entropy = values.reduce((sum, value) => {
+    const probability = value / total;
+    return sum - probability * Math.log2(probability);
+  }, 0);
+  return Math.round((entropy / Math.log2(values.length)) * 100);
+}
+
+function scoreLabel(score) {
+  if (score >= 80) return "탐색형 리스너";
+  if (score >= 60) return "균형형 리스너";
+  if (score >= 40) return "취향 집중형 리스너";
+  return "취향 발견 중";
 }
 
 function mapGenreBucket(genre) {
@@ -325,11 +396,11 @@ function mapGenreBucket(genre) {
   return "Other";
 }
 
-function buildSummary(score, buckets, genres, mainstream) {
+function buildSummary(score, buckets, genres, mainstream, concentration) {
   const mainBucket = buckets[0]?.name || "mixed music";
   const detail = genres[0]?.name || "genre exploration";
-  const stance = mainstream >= 70 ? "대중적인 감각이 강하지만" : "탐색 성향이 꽤 살아 있고";
-  return `지금 취향은 ${mainBucket} 중심이고, 세부적으로는 ${detail} 쪽 신호가 강해요. ${stance} 장르 폭과 세부 태그를 같이 보면 음악력 점수는 ${score}점입니다.`;
+  const stance = concentration >= 70 ? "특정 아티스트를 깊게 듣는 편이고" : "여러 아티스트를 폭넓게 탐색하는 편이며";
+  return `${mainBucket}을 중심으로 ${detail} 취향이 두드러져. ${stance} 현재 분석 점수는 ${score}점이야. 이 점수는 음악 실력이 아니라 장르 다양성, 감상 깊이, 새로운 음악 탐색 성향을 바탕으로 계산해.`;
 }
 
 function buildCriticMatches(genres, buckets) {
@@ -442,6 +513,7 @@ function loadEnv() {
 
 const demoDataset = {
   source: "demo",
+  provider: "demo",
   generatedAt: new Date().toISOString(),
   artists: [
     { id: "newjeans", name: "NewJeans", genres: ["k-pop", "k-pop girl group"], popularity: 86 },
