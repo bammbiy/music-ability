@@ -16,6 +16,7 @@ const PORT = Number(process.env.PORT || 3003);
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || "";
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || "";
 const SPOTIFY_REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || `http://localhost:${PORT}/callback`;
+const APPLE_MUSICKIT_DEVELOPER_TOKEN = process.env.APPLE_MUSICKIT_DEVELOPER_TOKEN || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-session-secret";
 
 const sessions = new Map();
@@ -48,6 +49,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/status") {
       return sendJson(res, {
         spotifyConfigured: Boolean(SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET),
+        appleConfigured: Boolean(APPLE_MUSICKIT_DEVELOPER_TOKEN),
+        appleDeveloperToken: APPLE_MUSICKIT_DEVELOPER_TOKEN || null,
         demoAvailable: true,
         dataCollection: {
           enabled: true,
@@ -70,6 +73,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/analysis") {
       return handleAnalysis(req, res, url);
+    }
+
+    if (url.pathname === "/api/apple/analysis" && req.method === "POST") {
+      return handleAppleAnalysis(req, res);
     }
 
     if (url.pathname === "/api/consent" && req.method === "POST") {
@@ -226,6 +233,82 @@ async function handleAnalysis(req, res, url) {
     saveAnalysisSnapshot({ userId: session.userId, provider: dataset.provider, analysis });
   }
   return sendJson(res, analysis);
+}
+
+async function handleAppleAnalysis(req, res) {
+  if (!APPLE_MUSICKIT_DEVELOPER_TOKEN) {
+    return sendJson(res, { error: "apple_not_configured" }, 503);
+  }
+
+  const payload = await readJson(req);
+  const musicUserToken = String(payload.musicUserToken || "").trim();
+  if (!musicUserToken || musicUserToken.length > 4096) {
+    return sendJson(res, { error: "music_user_token_required" }, 400);
+  }
+
+  const response = await fetch("https://api.music.apple.com/v1/me/recent/played/tracks?limit=30", {
+    headers: {
+      Authorization: `Bearer ${APPLE_MUSICKIT_DEVELOPER_TOKEN}`,
+      "Music-User-Token": musicUserToken
+    }
+  });
+
+  if (!response.ok) {
+    return sendJson(res, { error: "apple_api_failed", status: response.status }, response.status);
+  }
+
+  const appleData = await response.json();
+  const dataset = normalizeAppleDataset(appleData);
+  const analysis = buildAnalysis(dataset);
+  const session = getOrCreateSession(req, res);
+  const sessionData = sessions.get(session);
+  sessionData.userId ||= hashProviderAccount("apple", musicUserToken);
+  sessionData.provider = "apple";
+
+  if (sessionData.analysisConsent && sessionData.userId) {
+    saveAnalysisSnapshot({ userId: sessionData.userId, provider: dataset.provider, analysis });
+  }
+
+  return sendJson(res, analysis);
+}
+
+function normalizeAppleDataset(payload) {
+  const tracks = (payload.data || [])
+    .filter((resource) => resource.type === "songs")
+    .map((resource) => {
+      const attributes = resource.attributes || {};
+      const artist = {
+        id: attributes.artistName || "unknown",
+        name: attributes.artistName || "Unknown artist",
+        genres: attributes.genreNames || [],
+        popularity: null,
+        image: null
+      };
+      return {
+        id: resource.id,
+        name: attributes.name || "Unknown track",
+        album: attributes.albumName || "",
+        image: attributes.artwork?.url?.replace("{w}", "300").replace("{h}", "300") || null,
+        popularity: null,
+        releaseDate: attributes.releaseDate || "",
+        durationMs: attributes.durationInMillis || 0,
+        artists: [artist]
+      };
+    });
+
+  const artists = new Map();
+  for (const track of tracks) {
+    for (const artist of track.artists) artists.set(artist.name, artist);
+  }
+
+  return {
+    source: "apple",
+    provider: "apple",
+    generatedAt: new Date().toISOString(),
+    artists: [...artists.values()],
+    tracks,
+    recentTracks: tracks
+  };
 }
 
 function handleConsent(req, res) {

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Music Ability</title>
     <link rel="stylesheet" href="/css/styles.css">
+    <script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"></script>
   </head>
   <body>
     <main class="shell hero">
@@ -14,8 +15,11 @@
         <p class="lead">연결한 음악 서비스의 청취 데이터를 바탕으로 장르의 폭, 감상 깊이, 새로운 음악을 발견하는 성향을 분석해 보여줍니다.</p>
         <div class="actions">
           <a class="button primary" href="/login">Spotify로 시작</a>
+          <button class="button apple-button" id="apple-login" type="button">Apple Music으로 시작</button>
+          <button class="button secondary" id="youtube-login" type="button" title="공식 청취 기록 API 준비 중">YouTube Music 준비 중</button>
           <a class="button secondary" href="/dashboard.html?demo=1">데모 보기</a>
         </div>
+        <p class="notice" id="provider-notice" hidden></p>
         <p class="privacy">음악력 점수는 음악 실력의 순위가 아니라 개인의 음악 탐색 성향을 보여주는 지표입니다.</p>
       </section>
       <section class="signal-board" aria-label="preview">

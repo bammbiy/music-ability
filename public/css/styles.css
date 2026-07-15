@@ -99,6 +99,12 @@ a {
   color: #07120b;
 }
 
+.button.apple-button {
+  border-color: #f5f3ed;
+  background: #f5f3ed;
+  color: #111114;
+}
+
 .button.secondary {
   background: rgba(255, 255, 255, 0.04);
 }
@@ -107,6 +113,11 @@ a {
 .notice {
   color: var(--muted);
   font-size: 14px;
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
 }
 
 .notice {

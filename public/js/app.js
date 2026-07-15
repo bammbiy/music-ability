@@ -1,5 +1,6 @@
 const params = new URLSearchParams(window.location.search);
 const demo = params.get("demo") === "1";
+const provider = params.get("provider") || "spotify";
 
 const state = {
   loading: true,
@@ -11,9 +12,16 @@ bindFeedback();
 
 async function loadAnalysis() {
   try {
-    const response = await fetch(`/api/analysis${demo ? "?demo=1" : ""}`);
+    const response = provider === "apple" && !demo
+      ? await fetch("/api/apple/analysis", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ musicUserToken: sessionStorage.getItem("appleMusicUserToken") })
+        })
+      : await fetch(`/api/analysis${demo ? "?demo=1" : ""}`);
     if (!response.ok) throw new Error("analysis request failed");
     state.analysis = await response.json();
+    if (provider === "apple") sessionStorage.removeItem("appleMusicUserToken");
     render();
   } catch (error) {
     document.querySelector("#summary").textContent = "분석을 불러오지 못했습니다. Spotify 로그인 또는 데모 모드를 다시 시도해 주세요.";

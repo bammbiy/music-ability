@@ -1,7 +1,7 @@
 {
   "name": "music-ability",
   "version": "0.1.0",
-  "description": "Spotify-based music taste and music ability profile MVP.",
+  "description": "Provider-neutral music taste and music ability profile MVP.",
   "type": "module",
   "scripts": {
     "start": "node server/app.js",
