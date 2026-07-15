@@ -8,6 +8,6 @@
     "check": "node --check server/app.js && node --check public/js/app.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   }
 }

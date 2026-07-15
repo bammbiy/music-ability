@@ -7,6 +7,7 @@ const state = {
 };
 
 loadAnalysis();
+bindFeedback();
 
 async function loadAnalysis() {
   try {
@@ -96,4 +97,32 @@ function renderCritics(critics) {
       </div>
     `)
     .join("");
+}
+
+function bindFeedback() {
+  const consentButton = document.querySelector("#consent-button");
+  const feedbackForm = document.querySelector("#feedback-form");
+  const status = document.querySelector("#feedback-status");
+  if (!consentButton || !feedbackForm || !status) return;
+
+  consentButton.addEventListener("click", async () => {
+    const response = await fetch("/api/consent", { method: "POST" });
+    if (!response.ok) {
+      status.textContent = "Spotify 로그인 후 참여할 수 있어.";
+      return;
+    }
+    consentButton.textContent = "참여 중 · 분석 저장 허용됨";
+    status.textContent = "고마워. 다음 분석부터 익명화된 결과가 품질 개선에 사용돼.";
+  });
+
+  feedbackForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const rating = Number(new FormData(feedbackForm).get("rating"));
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetType: "analysis", targetId: "analysis-v1", rating })
+    });
+    status.textContent = response.ok ? "평가가 저장됐어. 다음 계산을 더 정확하게 만드는 데 반영할게." : "품질 개선 참여를 먼저 눌러줘.";
+  });
 }

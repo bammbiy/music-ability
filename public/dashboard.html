@@ -47,6 +47,26 @@
           <span class="label">취향이 겹치는 큐레이터</span>
           <div id="critics" class="rank-list"></div>
         </article>
+
+        <article class="panel wide feedback-panel">
+          <span class="label">분석 품질 개선</span>
+          <p>분석 결과와 평가를 익명화해 음악력 계산을 개선하는 데 사용할 수 있어. 참여 여부는 언제든 바꿀 수 있어.</p>
+          <div class="feedback-actions">
+            <button class="button primary" id="consent-button" type="button">품질 개선에 참여</button>
+            <form id="feedback-form" class="feedback-form">
+              <label for="rating">이번 분석은 얼마나 잘 맞나요?</label>
+              <select id="rating" name="rating">
+                <option value="5">5점 · 매우 잘 맞음</option>
+                <option value="4">4점 · 잘 맞음</option>
+                <option value="3">3점 · 보통</option>
+                <option value="2">2점 · 조금 다름</option>
+                <option value="1">1점 · 전혀 다름</option>
+              </select>
+              <button class="button secondary" type="submit">평가 보내기</button>
+            </form>
+          </div>
+          <small id="feedback-status" class="feedback-status" role="status"></small>
+        </article>
       </section>
     </main>
     <script type="module" src="/js/app.js"></script>

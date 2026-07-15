@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deleteUserData, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
@@ -47,7 +48,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/status") {
       return sendJson(res, {
         spotifyConfigured: Boolean(SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET),
-        demoAvailable: true
+        demoAvailable: true,
+        dataCollection: {
+          enabled: true,
+          consentRequired: true
+        }
       });
     }
 
@@ -73,6 +78,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/account/disconnect" && req.method === "POST") {
       return handleDisconnect(req, res);
+    }
+
+    if (url.pathname === "/api/feedback" && req.method === "POST") {
+      return handleFeedback(req, res);
     }
 
     return serveStatic(res, url.pathname);
@@ -137,11 +146,18 @@ async function handleCallback(req, res, url) {
   }
 
   const token = await tokenResponse.json();
+  const profileResponse = await fetch("https://api.spotify.com/v1/me", {
+    headers: { Authorization: `Bearer ${token.access_token}` }
+  });
+  const profile = profileResponse.ok ? await profileResponse.json() : null;
+  const providerAccount = profile?.account_id || profile?.id;
   sessions.set(session.id, {
     ...session,
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
-    expiresAt: Date.now() + token.expires_in * 1000
+    expiresAt: Date.now() + token.expires_in * 1000,
+    userId: providerAccount ? hashProviderAccount("spotify", providerAccount) : null,
+    provider: "spotify"
   });
 
   redirect(res, "/dashboard.html");
@@ -205,7 +221,11 @@ async function handleAnalysis(req, res, url) {
     recentTracks: (recentTracks.items || []).map((item) => normalizeTrack(item.track, artistById))
   };
 
-  return sendJson(res, buildAnalysis(dataset));
+  const analysis = buildAnalysis(dataset);
+  if (session.analysisConsent && session.userId) {
+    saveAnalysisSnapshot({ userId: session.userId, provider: dataset.provider, analysis });
+  }
+  return sendJson(res, analysis);
 }
 
 function handleConsent(req, res) {
@@ -214,14 +234,40 @@ function handleConsent(req, res) {
 
   session.analysisConsent = true;
   session.consentAt = new Date().toISOString();
+  if (session.userId) {
+    saveConsent({ userId: session.userId, provider: session.provider || "unknown", consentedAt: session.consentAt });
+  }
   return sendJson(res, { consented: true, consentAt: session.consentAt });
 }
 
 function handleDisconnect(req, res) {
   const session = getSession(req);
-  if (session) sessions.delete(session.id);
+  if (session) {
+    if (session.userId) deleteUserData(session.userId);
+    sessions.delete(session.id);
+  }
   res.setHeader("Set-Cookie", "ma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
   return sendJson(res, { disconnected: true, deleted: true });
+}
+
+async function handleFeedback(req, res) {
+  const session = getSession(req);
+  if (!session?.userId || !session.analysisConsent) {
+    return sendJson(res, { error: "consent_required" }, 403);
+  }
+
+  const payload = await readJson(req);
+  const targetType = String(payload.targetType || "").trim();
+  const targetId = String(payload.targetId || "").trim();
+  const rating = Number(payload.rating);
+  const validTypes = new Set(["analysis", "genre", "track"]);
+
+  if (!validTypes.has(targetType) || !targetId || targetId.length > 120 || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return sendJson(res, { error: "invalid_feedback" }, 400);
+  }
+
+  saveFeedback({ userId: session.userId, targetType, targetId, rating });
+  return sendJson(res, { saved: true });
 }
 
 async function hydrateArtistGenres(session, artistById, missingArtists) {
@@ -459,6 +505,22 @@ function getSession(req) {
 
 function signSession(sessionId) {
   return createHash("sha256").update(`${sessionId}.${SESSION_SECRET}`).digest("hex").slice(0, 24);
+}
+
+function hashProviderAccount(provider, accountId) {
+  return `${provider}:${createHash("sha256").update(`${provider}:${accountId}`).digest("hex").slice(0, 32)}`;
+}
+
+async function readJson(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 16 * 1024) throw new Error("request_too_large");
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
 async function serveStatic(res, pathname) {
