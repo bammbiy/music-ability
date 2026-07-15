@@ -67,6 +67,16 @@
           </div>
           <small id="feedback-status" class="feedback-status" role="status"></small>
         </article>
+
+        <article class="panel wide media-panel">
+          <span class="label">음악 정보 피드</span>
+          <div class="media-search">
+            <label class="sr-only" for="media-query">정보 검색</label>
+            <input id="media-query" type="search" value="new music" placeholder="아티스트나 곡 검색">
+            <button class="button secondary" id="media-search-button" type="button">검색</button>
+          </div>
+          <div id="media-items" class="media-list"></div>
+        </article>
       </section>
     </main>
     <script type="module" src="/js/app.js"></script>

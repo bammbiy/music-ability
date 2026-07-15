@@ -9,6 +9,7 @@ const state = {
 
 loadAnalysis();
 bindFeedback();
+loadMedia("new music");
 
 async function loadAnalysis() {
   try {
@@ -133,4 +134,39 @@ function bindFeedback() {
     });
     status.textContent = response.ok ? "평가가 저장됐어. 다음 계산을 더 정확하게 만드는 데 반영할게." : "품질 개선 참여를 먼저 눌러줘.";
   });
+}
+
+async function loadMedia(query) {
+  const container = document.querySelector("#media-items");
+  const input = document.querySelector("#media-query");
+  const button = document.querySelector("#media-search-button");
+  if (!container || !input || !button) return;
+
+  if (!button.dataset.bound) {
+    button.dataset.bound = "1";
+    button.addEventListener("click", () => loadMedia(input.value.trim() || "new music"));
+  }
+  container.innerHTML = "<p class=\"muted\">정보를 불러오는 중이야.</p>";
+  const response = await fetch(`/api/media?q=${encodeURIComponent(query)}`);
+  if (!response.ok) {
+    container.innerHTML = "<p class=\"muted\">정보 피드를 불러오지 못했어.</p>";
+    return;
+  }
+  const data = await response.json();
+  if (data.items.length === 0) {
+    container.innerHTML = "<p class=\"muted\">연결된 정보 소스가 아직 없어. API 키나 RSS 주소를 설정하면 여기에 표시돼.</p>";
+    return;
+  }
+  container.innerHTML = data.items.map((item) => `
+    <a class="media-item" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">
+      ${item.image ? `<img src="${escapeHtml(item.image)}" alt="">` : ""}
+      <div><small>${escapeHtml(item.source)} · ${item.type === "video" ? "영상" : item.type === "social" ? "소셜" : "기사"}</small><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.description || "")}</p></div>
+    </a>
+  `).join("");
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+  }[character]));
 }

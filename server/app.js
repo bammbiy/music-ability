@@ -17,6 +17,9 @@ const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || "";
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || "";
 const SPOTIFY_REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || `http://localhost:${PORT}/callback`;
 const APPLE_MUSICKIT_DEVELOPER_TOKEN = process.env.APPLE_MUSICKIT_DEVELOPER_TOKEN || "";
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "";
+const NEWS_RSS_URLS = parseList(process.env.NEWS_RSS_URLS);
+const SOCIAL_FEED_URLS = parseList(process.env.SOCIAL_FEED_URLS);
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-session-secret";
 
 const sessions = new Map();
@@ -77,6 +80,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/apple/analysis" && req.method === "POST") {
       return handleAppleAnalysis(req, res);
+    }
+
+    if (url.pathname === "/api/media" && req.method === "GET") {
+      return handleMedia(req, res, url);
     }
 
     if (url.pathname === "/api/consent" && req.method === "POST") {
@@ -270,6 +277,95 @@ async function handleAppleAnalysis(req, res) {
   }
 
   return sendJson(res, analysis);
+}
+
+async function handleMedia(req, res, url) {
+  const query = (url.searchParams.get("q") || "new music").trim().slice(0, 120);
+  const [youtube, news, social] = await Promise.all([
+    fetchYouTubeMedia(query),
+    fetchFeedMedia(NEWS_RSS_URLS, "article"),
+    fetchFeedMedia(SOCIAL_FEED_URLS, "social")
+  ]);
+
+  return sendJson(res, {
+    query,
+    items: [...youtube, ...news, ...social].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0)),
+    configured: {
+      youtube: Boolean(YOUTUBE_API_KEY),
+      news: NEWS_RSS_URLS.length > 0,
+      social: SOCIAL_FEED_URLS.length > 0
+    }
+  });
+}
+
+async function fetchYouTubeMedia(query) {
+  if (!YOUTUBE_API_KEY) return [];
+  const endpoint = new URL("https://www.googleapis.com/youtube/v3/search");
+  endpoint.searchParams.set("part", "snippet");
+  endpoint.searchParams.set("q", query);
+  endpoint.searchParams.set("type", "video");
+  endpoint.searchParams.set("order", "date");
+  endpoint.searchParams.set("maxResults", "6");
+  endpoint.searchParams.set("relevanceLanguage", "ko");
+  endpoint.searchParams.set("key", YOUTUBE_API_KEY);
+
+  const response = await fetch(endpoint);
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return (payload.items || []).map((item) => ({
+    type: "video",
+    source: "YouTube",
+    title: item.snippet?.title || "YouTube video",
+    description: stripMarkup(item.snippet?.description || ""),
+    url: `https://www.youtube.com/watch?v=${item.id?.videoId || ""}`,
+    image: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || null,
+    publishedAt: item.snippet?.publishedAt || null,
+    author: item.snippet?.channelTitle || ""
+  }));
+}
+
+async function fetchFeedMedia(urls, type) {
+  const results = await Promise.all(urls.map(async (feedUrl) => {
+    try {
+      const response = await fetch(feedUrl, { headers: { Accept: "application/rss+xml, application/atom+xml, application/xml" } });
+      if (!response.ok) return [];
+      const xml = await response.text();
+      return parseFeed(xml, feedUrl, type);
+    } catch {
+      return [];
+    }
+  }));
+  return results.flat().slice(0, 20);
+}
+
+function parseFeed(xml, sourceUrl, type) {
+  const blocks = [...xml.matchAll(/<(item|entry)\b[\s\S]*?<\/\1>/gi)].map((match) => match[0]);
+  const source = new URL(sourceUrl).hostname.replace(/^www\./, "");
+  return blocks.slice(0, 10).map((block) => {
+    const title = decodeXml(extractTag(block, "title"));
+    const description = stripMarkup(decodeXml(extractTag(block, "description") || extractTag(block, "summary")));
+    const link = extractTag(block, "link") || block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] || "";
+    const publishedAt = extractTag(block, "pubDate") || extractTag(block, "published") || extractTag(block, "updated") || null;
+    return { type, source, title, description, url: link, image: null, publishedAt, author: source };
+  }).filter((item) => item.title && item.url);
+}
+
+function extractTag(xml, tag) {
+  return xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"))?.[1]?.trim() || "";
+}
+
+function stripMarkup(value) {
+  return String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function normalizeAppleDataset(payload) {
@@ -604,6 +700,10 @@ async function readJson(req) {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function parseList(value) {
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean).slice(0, 20);
 }
 
 async function serveStatic(res, pathname) {

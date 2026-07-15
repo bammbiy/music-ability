@@ -340,6 +340,79 @@ select {
   color: var(--green);
 }
 
+.media-search {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.media-search input {
+  min-width: 0;
+  flex: 1;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font: inherit;
+}
+
+.media-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.media-item {
+  display: flex;
+  min-height: 132px;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.media-item img {
+  width: 86px;
+  height: 86px;
+  flex: 0 0 86px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.media-item small,
+.media-item strong,
+.media-item p {
+  display: block;
+}
+
+.media-item small,
+.muted {
+  color: var(--muted);
+}
+
+.media-item strong {
+  margin: 6px 0;
+  line-height: 1.35;
+}
+
+.media-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
 @media (max-width: 820px) {
   .hero,
   .result-grid {
@@ -353,5 +426,9 @@ select {
 
   .topbar {
     display: grid;
+  }
+
+  .media-list {
+    grid-template-columns: 1fr;
   }
 }

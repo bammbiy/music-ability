@@ -56,6 +56,9 @@ SPOTIFY_REDIRECT_URI=http://localhost:3003/callback
 SESSION_SECRET=use_a_long_random_value
 PORT=3003
 APPLE_MUSICKIT_DEVELOPER_TOKEN=your_apple_music_developer_token
+YOUTUBE_API_KEY=your_youtube_data_api_key
+NEWS_RSS_URLS=
+SOCIAL_FEED_URLS=
 ```
 
 4. 서버를 다시 시작하고 Spotify 로그인 버튼을 누릅니다.
@@ -67,6 +70,12 @@ Apple Music 웹 로그인은 MusicKit on the Web을 사용합니다. Apple Devel
 ## YouTube Music Scope
 
 Google OAuth와 YouTube Data API는 유튜브 계정, 채널, 영상, 플레이리스트 같은 리소스에 접근할 수 있지만 공식 YouTube Music 개인 청취 기록 API는 제공하지 않습니다. 따라서 현재 버튼은 준비 중으로 안내하고, 이후 공식 범위 안에서 플레이리스트 가져오기와 사용자 파일 내보내기를 지원합니다. 비공식 YouTube Music 스크래핑은 사용하지 않습니다. [YouTube OAuth](https://developers.google.com/youtube/v3/guides/authentication), [YouTube Data API](https://developers.google.com/youtube/v3/docs)
+
+## Media Feed Setup
+
+대시보드에는 출처 링크가 붙은 음악 정보 피드가 있습니다. `YOUTUBE_API_KEY`를 설정하면 공식 YouTube 검색 결과를 사용하고, `NEWS_RSS_URLS` 또는 `SOCIAL_FEED_URLS`에 공식 RSS/Atom 피드 주소를 쉼표로 입력하면 기사와 공식 소셜 피드를 추가할 수 있습니다. 피드 데이터는 사용자 데이터와 섞어 저장하지 않습니다.
+
+서버 엔드포인트는 `GET /api/media?q=artist%20name`입니다. YouTube 검색은 공식 `search.list` 엔드포인트와 Google 할당량 정책을 따릅니다. [YouTube Search: list](https://developers.google.com/youtube/v3/docs/search/list)
 
 ## Data Scope
 
