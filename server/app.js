@@ -1,8 +1,8 @@
 import http from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createHash, randomBytes } from "node:crypto";
-import { extname, join, resolve } from "node:path";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deleteUserData, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
 
@@ -20,9 +20,18 @@ const APPLE_MUSICKIT_DEVELOPER_TOKEN = process.env.APPLE_MUSICKIT_DEVELOPER_TOKE
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "";
 const NEWS_RSS_URLS = parseList(process.env.NEWS_RSS_URLS);
 const SOCIAL_FEED_URLS = parseList(process.env.SOCIAL_FEED_URLS);
-const SESSION_SECRET = process.env.SESSION_SECRET || "dev-session-secret";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const SESSION_SECRET = resolveSessionSecret();
+const USER_HASH_SECRET = process.env.USER_HASH_SECRET || SESSION_SECRET;
+const COOKIE_SECURE = IS_PRODUCTION || SPOTIFY_REDIRECT_URI.startsWith("https://");
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PENDING_SESSION_TTL_MS = 15 * 60 * 1000;
+const EXTERNAL_FETCH_TIMEOUT_MS = 8000;
+const MEDIA_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const sessions = new Map();
+const rateLimits = new Map();
+const mediaCache = new Map();
 const spotifyScopes = [
   "user-read-private",
   "user-read-email",
@@ -45,9 +54,42 @@ const mimeTypes = {
   ".ico": "image/x-icon"
 };
 
+const securityHeaders = {
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "script-src 'self' https://js-cdn.music.apple.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' https: data:",
+    "connect-src 'self' https://*.apple.com",
+    "frame-src https://*.apple.com",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'"
+  ].join("; "),
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups"
+};
+
 const server = http.createServer(async (req, res) => {
+  for (const [name, value] of Object.entries(securityHeaders)) res.setHeader(name, value);
+  if (COOKIE_SECURE) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const url = new URL(req.url || "/", "http://localhost");
+
+    if (req.method === "POST" && !isSameOrigin(req)) {
+      return sendJson(res, { error: "forbidden_origin" }, 403);
+    }
+
+    const limit = rateLimitFor(url.pathname, req.method);
+    if (limit && !allowRequest(req, limit)) {
+      res.setHeader("Retry-After", String(Math.ceil(limit.windowMs / 1000)));
+      return sendJson(res, { error: "rate_limited" }, 429);
+    }
 
     if (url.pathname === "/api/status") {
       return sendJson(res, {
@@ -100,10 +142,15 @@ const server = http.createServer(async (req, res) => {
 
     return serveStatic(res, url.pathname);
   } catch (error) {
+    if (error instanceof HttpError) {
+      return sendJson(res, { error: error.code }, error.status);
+    }
     console.error(error);
-    return sendJson(res, { error: "server_error", message: error.message }, 500);
+    return sendJson(res, { error: "server_error" }, 500);
   }
 });
+
+setInterval(sweepExpiredState, 60 * 1000).unref();
 
 server.listen(PORT, () => {
   console.log(`Music Ability running at http://localhost:${PORT}`);
@@ -117,7 +164,7 @@ async function handleLogin(req, res) {
 
   const sessionId = getOrCreateSession(req, res);
   const state = randomBytes(16).toString("hex");
-  sessions.set(sessionId, { ...sessions.get(sessionId), state });
+  sessions.get(sessionId).state = state;
 
   const authUrl = new URL("https://accounts.spotify.com/authorize");
   authUrl.searchParams.set("response_type", "code");
@@ -134,7 +181,9 @@ async function handleCallback(req, res, url) {
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
 
-  if (!session || !code || !state || state !== session.state) {
+  const expectedState = session?.state;
+  if (session) delete session.state;
+  if (!session || !code || !state || !expectedState || !safeEqual(state, expectedState)) {
     redirect(res, "/?auth=failed");
     return;
   }
@@ -147,6 +196,7 @@ async function handleCallback(req, res, url) {
 
   const tokenResponse = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
+    signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
     headers: {
       Authorization: `Basic ${Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString("base64")}`,
       "Content-Type": "application/x-www-form-urlencoded"
@@ -161,17 +211,21 @@ async function handleCallback(req, res, url) {
 
   const token = await tokenResponse.json();
   const profileResponse = await fetch("https://api.spotify.com/v1/me", {
-    headers: { Authorization: `Bearer ${token.access_token}` }
+    headers: { Authorization: `Bearer ${token.access_token}` },
+    signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS)
   });
   const profile = profileResponse.ok ? await profileResponse.json() : null;
   const providerAccount = profile?.account_id || profile?.id;
-  sessions.set(session.id, {
-    ...session,
+
+  // Issue a fresh session id after login so a pre-login cookie cannot be reused (session fixation).
+  sessions.delete(session.id);
+  createSession(res, {
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + token.expires_in * 1000,
     userId: providerAccount ? hashProviderAccount("spotify", providerAccount) : null,
-    provider: "spotify"
+    provider: "spotify",
+    analysisConsent: false
   });
 
   redirect(res, "/dashboard.html");
@@ -189,7 +243,6 @@ async function handleMe(req, res) {
     profile: {
       id: profile.id,
       displayName: profile.display_name,
-      email: profile.email,
       image: profile.images?.[0]?.url || null,
       country: profile.country
     }
@@ -254,6 +307,7 @@ async function handleAppleAnalysis(req, res) {
   }
 
   const response = await fetch("https://api.music.apple.com/v1/me/recent/played/tracks?limit=30", {
+    signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${APPLE_MUSICKIT_DEVELOPER_TOKEN}`,
       "Music-User-Token": musicUserToken
@@ -261,7 +315,8 @@ async function handleAppleAnalysis(req, res) {
   });
 
   if (!response.ok) {
-    return sendJson(res, { error: "apple_api_failed", status: response.status }, response.status);
+    const status = response.status === 401 || response.status === 403 ? 401 : 502;
+    return sendJson(res, { error: "apple_api_failed" }, status);
   }
 
   const appleData = await response.json();
@@ -269,7 +324,12 @@ async function handleAppleAnalysis(req, res) {
   const analysis = buildAnalysis(dataset);
   const session = getOrCreateSession(req, res);
   const sessionData = sessions.get(session);
-  sessionData.userId ||= hashProviderAccount("apple", musicUserToken);
+  const appleUserId = hashProviderAccount("apple", musicUserToken);
+  if (sessionData.userId !== appleUserId) {
+    // Consent is tied to one provider account; never carry it over to a different one.
+    sessionData.userId = appleUserId;
+    sessionData.analysisConsent = false;
+  }
   sessionData.provider = "apple";
 
   if (sessionData.analysisConsent && sessionData.userId) {
@@ -280,14 +340,20 @@ async function handleAppleAnalysis(req, res) {
 }
 
 async function handleMedia(req, res, url) {
-  const query = (url.searchParams.get("q") || "new music").trim().slice(0, 120);
+  const query = (url.searchParams.get("q") || "new music").trim().slice(0, 120) || "new music";
+  const cacheKey = query.toLowerCase();
+  const cached = mediaCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return sendJson(res, cached.payload);
+  }
+
   const [youtube, news, social] = await Promise.all([
     fetchYouTubeMedia(query),
     fetchFeedMedia(NEWS_RSS_URLS, "article"),
     fetchFeedMedia(SOCIAL_FEED_URLS, "social")
   ]);
 
-  return sendJson(res, {
+  const payload = {
     query,
     items: [...youtube, ...news, ...social].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0)),
     configured: {
@@ -295,7 +361,10 @@ async function handleMedia(req, res, url) {
       news: NEWS_RSS_URLS.length > 0,
       social: SOCIAL_FEED_URLS.length > 0
     }
-  });
+  };
+  if (mediaCache.size >= 500) mediaCache.delete(mediaCache.keys().next().value);
+  mediaCache.set(cacheKey, { payload, expiresAt: Date.now() + MEDIA_CACHE_TTL_MS });
+  return sendJson(res, payload);
 }
 
 async function fetchYouTubeMedia(query) {
@@ -309,16 +378,21 @@ async function fetchYouTubeMedia(query) {
   endpoint.searchParams.set("relevanceLanguage", "ko");
   endpoint.searchParams.set("key", YOUTUBE_API_KEY);
 
-  const response = await fetch(endpoint);
-  if (!response.ok) return [];
-  const payload = await response.json();
-  return (payload.items || []).map((item) => ({
+  let payload;
+  try {
+    const response = await fetch(endpoint, { signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS) });
+    if (!response.ok) return [];
+    payload = await response.json();
+  } catch {
+    return [];
+  }
+  return (payload.items || []).filter((item) => item.id?.videoId).map((item) => ({
     type: "video",
     source: "YouTube",
     title: item.snippet?.title || "YouTube video",
     description: stripMarkup(item.snippet?.description || ""),
-    url: `https://www.youtube.com/watch?v=${item.id?.videoId || ""}`,
-    image: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || null,
+    url: `https://www.youtube.com/watch?v=${encodeURIComponent(item.id.videoId)}`,
+    image: safeHttpUrl(item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url),
     publishedAt: item.snippet?.publishedAt || null,
     author: item.snippet?.channelTitle || ""
   }));
@@ -327,9 +401,12 @@ async function fetchYouTubeMedia(query) {
 async function fetchFeedMedia(urls, type) {
   const results = await Promise.all(urls.map(async (feedUrl) => {
     try {
-      const response = await fetch(feedUrl, { headers: { Accept: "application/rss+xml, application/atom+xml, application/xml" } });
+      const response = await fetch(feedUrl, {
+        headers: { Accept: "application/rss+xml, application/atom+xml, application/xml" },
+        signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS)
+      });
       if (!response.ok) return [];
-      const xml = await response.text();
+      const xml = (await response.text()).slice(0, 2 * 1024 * 1024);
       return parseFeed(xml, feedUrl, type);
     } catch {
       return [];
@@ -342,9 +419,9 @@ function parseFeed(xml, sourceUrl, type) {
   const blocks = [...xml.matchAll(/<(item|entry)\b[\s\S]*?<\/\1>/gi)].map((match) => match[0]);
   const source = new URL(sourceUrl).hostname.replace(/^www\./, "");
   return blocks.slice(0, 10).map((block) => {
-    const title = decodeXml(extractTag(block, "title"));
+    const title = stripMarkup(decodeXml(extractTag(block, "title")));
     const description = stripMarkup(decodeXml(extractTag(block, "description") || extractTag(block, "summary")));
-    const link = extractTag(block, "link") || block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] || "";
+    const link = safeHttpUrl(decodeXml(extractTag(block, "link") || block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] || ""));
     const publishedAt = extractTag(block, "pubDate") || extractTag(block, "published") || extractTag(block, "updated") || null;
     return { type, source, title, description, url: link, image: null, publishedAt, author: source };
   }).filter((item) => item.title && item.url);
@@ -409,13 +486,11 @@ function normalizeAppleDataset(payload) {
 
 function handleConsent(req, res) {
   const session = getSession(req);
-  if (!session) return sendJson(res, { error: "not_authenticated" }, 401);
+  if (!session?.userId) return sendJson(res, { error: "not_authenticated" }, 401);
 
   session.analysisConsent = true;
   session.consentAt = new Date().toISOString();
-  if (session.userId) {
-    saveConsent({ userId: session.userId, provider: session.provider || "unknown", consentedAt: session.consentAt });
-  }
+  saveConsent({ userId: session.userId, provider: session.provider || "unknown", consentedAt: session.consentAt });
   return sendJson(res, { consented: true, consentAt: session.consentAt });
 }
 
@@ -425,7 +500,7 @@ function handleDisconnect(req, res) {
     if (session.userId) deleteUserData(session.userId);
     sessions.delete(session.id);
   }
-  res.setHeader("Set-Cookie", "ma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+  res.setHeader("Set-Cookie", sessionCookie("", 0));
   return sendJson(res, { disconnected: true, deleted: true });
 }
 
@@ -462,16 +537,51 @@ async function hydrateArtistGenres(session, artistById, missingArtists) {
 }
 
 async function spotifyGet(session, endpoint) {
+  await ensureFreshSpotifyToken(session);
   const response = await fetch(endpoint, {
-    headers: { Authorization: `Bearer ${session.accessToken}` }
+    headers: { Authorization: `Bearer ${session.accessToken}` },
+    signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS)
   });
 
+  if (response.status === 401) {
+    throw new HttpError(401, "spotify_reauth_required");
+  }
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Spotify API failed: ${response.status} ${detail}`);
+    console.error(`Spotify API failed: ${response.status} ${endpoint}`);
+    throw new HttpError(502, "spotify_api_failed");
   }
 
   return response.json();
+}
+
+async function ensureFreshSpotifyToken(session) {
+  if (!session.expiresAt || session.expiresAt - 60 * 1000 > Date.now()) return;
+  if (!session.refreshToken) throw new HttpError(401, "spotify_reauth_required");
+
+  session.refreshing ||= (async () => {
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: session.refreshToken })
+    });
+    if (!response.ok) {
+      delete session.accessToken;
+      delete session.refreshToken;
+      throw new HttpError(401, "spotify_reauth_required");
+    }
+    const token = await response.json();
+    session.accessToken = token.access_token;
+    session.expiresAt = Date.now() + token.expires_in * 1000;
+    if (token.refresh_token) session.refreshToken = token.refresh_token;
+  })().finally(() => {
+    delete session.refreshing;
+  });
+
+  return session.refreshing;
 }
 
 function normalizeArtist(artist) {
@@ -665,29 +775,122 @@ function average(values) {
 function getOrCreateSession(req, res) {
   const existing = getSession(req);
   if (existing) return existing.id;
+  return createSession(res).id;
+}
 
+function createSession(res, data = {}) {
   const sessionId = randomBytes(24).toString("hex");
-  const signature = signSession(sessionId);
-  sessions.set(sessionId, { id: sessionId });
-  res.setHeader("Set-Cookie", `ma_session=${sessionId}.${signature}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`);
-  return sessionId;
+  const now = Date.now();
+  const session = { ...data, id: sessionId, createdAt: now, lastSeenAt: now };
+  sessions.set(sessionId, session);
+  res.setHeader("Set-Cookie", sessionCookie(`${sessionId}.${signSession(sessionId)}`, SESSION_TTL_MS / 1000));
+  return session;
+}
+
+function sessionCookie(value, maxAgeSeconds) {
+  return `ma_session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}${COOKIE_SECURE ? "; Secure" : ""}`;
 }
 
 function getSession(req) {
   const cookie = req.headers.cookie || "";
   const match = cookie.match(/(?:^|;\s*)ma_session=([^;]+)/);
   if (!match) return null;
-  const [sessionId, signature] = decodeURIComponent(match[1]).split(".");
-  if (!sessionId || !signature || signSession(sessionId) !== signature) return null;
-  return sessions.get(sessionId) || null;
+  const [sessionId, signature] = match[1].split(".");
+  if (!sessionId || !signature || !safeEqual(signSession(sessionId), signature)) return null;
+  const session = sessions.get(sessionId);
+  if (!session || isSessionExpired(session, Date.now())) return null;
+  session.lastSeenAt = Date.now();
+  return session;
+}
+
+function isSessionExpired(session, now) {
+  const idleLimit = session.accessToken || session.userId ? SESSION_TTL_MS : PENDING_SESSION_TTL_MS;
+  return now - session.lastSeenAt > idleLimit;
+}
+
+function sweepExpiredState() {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (isSessionExpired(session, now)) sessions.delete(id);
+  }
+  for (const [key, entry] of rateLimits) {
+    if (entry.resetAt <= now) rateLimits.delete(key);
+  }
+  for (const [key, entry] of mediaCache) {
+    if (entry.expiresAt <= now) mediaCache.delete(key);
+  }
 }
 
 function signSession(sessionId) {
-  return createHash("sha256").update(`${sessionId}.${SESSION_SECRET}`).digest("hex").slice(0, 24);
+  return createHmac("sha256", SESSION_SECRET).update(sessionId).digest("hex").slice(0, 32);
 }
 
 function hashProviderAccount(provider, accountId) {
-  return `${provider}:${createHash("sha256").update(`${provider}:${accountId}`).digest("hex").slice(0, 32)}`;
+  return `${provider}:${createHmac("sha256", USER_HASH_SECRET).update(`${provider}:${accountId}`).digest("hex").slice(0, 32)}`;
+}
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function safeHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || "").trim());
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return req.headers["sec-fetch-site"] !== "cross-site";
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function rateLimitFor(pathname, method) {
+  if (pathname === "/api/media") return { key: "media", max: 30, windowMs: 60 * 1000 };
+  if (pathname === "/login" || pathname === "/callback") return { key: "auth", max: 20, windowMs: 60 * 1000 };
+  if (pathname.startsWith("/api/") && method === "POST") return { key: "post", max: 30, windowMs: 60 * 1000 };
+  if (pathname === "/api/analysis") return { key: "analysis", max: 20, windowMs: 60 * 1000 };
+  return null;
+}
+
+function allowRequest(req, { key, max, windowMs }) {
+  const bucketKey = `${key}:${req.socket.remoteAddress || "unknown"}`;
+  const now = Date.now();
+  const entry = rateLimits.get(bucketKey);
+  if (!entry || entry.resetAt <= now) {
+    rateLimits.set(bucketKey, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= max;
+}
+
+function resolveSessionSecret() {
+  const configured = process.env.SESSION_SECRET || "";
+  const placeholder = !configured || configured.startsWith("change_this") || configured === "use_a_long_random_value" || configured === "dev-session-secret";
+  if (!placeholder && configured.length >= 32) return configured;
+  if (IS_PRODUCTION) {
+    throw new Error("SESSION_SECRET must be set to a random value of at least 32 characters in production.");
+  }
+  console.warn("SESSION_SECRET is missing or weak; using a random per-process secret (sessions reset on restart).");
+  return randomBytes(32).toString("hex");
+}
+
+class HttpError extends Error {
+  constructor(status, code) {
+    super(code);
+    this.status = status;
+    this.code = code;
+  }
 }
 
 async function readJson(req) {
@@ -695,11 +898,16 @@ async function readJson(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 16 * 1024) throw new Error("request_too_large");
+    if (size > 16 * 1024) throw new HttpError(413, "request_too_large");
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    throw new HttpError(400, "invalid_json");
+  }
 }
 
 function parseList(value) {
@@ -709,7 +917,7 @@ function parseList(value) {
 async function serveStatic(res, pathname) {
   const safePath = pathname === "/" ? "/index.html" : pathname;
   const filePath = resolve(publicDir, `.${safePath}`);
-  if (!filePath.startsWith(publicDir)) {
+  if (!filePath.startsWith(publicDir + sep)) {
     return sendText(res, "Not found", 404);
   }
 

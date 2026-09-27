@@ -115,6 +115,16 @@ Spotify Public Web API는 전체 청취 시간 기록을 직접 제공하지 않
 
 현재 SQLite 파일은 `data/music-ability.sqlite`에 생성되며 Git에는 포함되지 않습니다. 공개 서비스에서는 이 저장소를 관리형 PostgreSQL로 교체하고, 개인정보처리방침과 관리자용 데이터 보존 정책을 추가해야 합니다.
 
+## Security
+
+- 세션 쿠키는 HMAC 서명, `HttpOnly`, `SameSite=Lax`이며 HTTPS 환경(`NODE_ENV=production` 또는 https Redirect URI)에서는 `Secure`가 붙습니다. 로그인 후 세션 ID를 새로 발급합니다.
+- `SESSION_SECRET`은 32자 이상 무작위 값이어야 합니다. 개발 중 비어 있으면 프로세스마다 임시 키를 쓰고, `NODE_ENV=production`에서는 서버가 시작되지 않습니다.
+- 저장되는 사용자 ID는 `USER_HASH_SECRET`(없으면 `SESSION_SECRET`) 키로 만든 HMAC 값입니다. 이 키를 바꾸면 기존 저장 데이터와 연결이 끊깁니다.
+- 모든 응답에 CSP, `X-Frame-Options`, `nosniff` 등 보안 헤더를 붙이고, POST 요청은 같은 출처에서만 허용합니다.
+- `/api/media`, 로그인, POST API에는 IP별 요청 제한이 있고, 미디어 검색 결과는 5분간 캐시해 YouTube 할당량을 보호합니다.
+- Spotify access token은 만료 전에 refresh token으로 자동 갱신됩니다.
+- Apple MusicKit developer token은 MusicKit JS가 브라우저에서 사용해야 하므로 `/api/status`로 공개됩니다. 짧은 만료 기간과 `origin` 클레임을 넣어 발급하세요.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

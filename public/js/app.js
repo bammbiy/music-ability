@@ -20,9 +20,9 @@ async function loadAnalysis() {
           body: JSON.stringify({ musicUserToken: sessionStorage.getItem("appleMusicUserToken") })
         })
       : await fetch(`/api/analysis${demo ? "?demo=1" : ""}`);
+    if (provider === "apple") sessionStorage.removeItem("appleMusicUserToken");
     if (!response.ok) throw new Error("analysis request failed");
     state.analysis = await response.json();
-    if (provider === "apple") sessionStorage.removeItem("appleMusicUserToken");
     render();
   } catch (error) {
     document.querySelector("#summary").textContent = "분석을 불러오지 못했습니다. Spotify 로그인 또는 데모 모드를 다시 시도해 주세요.";
@@ -34,7 +34,7 @@ async function loadAnalysis() {
 
 function render() {
   const data = state.analysis;
-  document.querySelector("#score").textContent = data.score;
+  document.querySelector("#score").textContent = String(data.score);
   document.querySelector("#summary").textContent = data.summary;
 
   renderMetrics(data.metrics);
@@ -56,8 +56,8 @@ function renderMetrics(metrics) {
   document.querySelector("#metrics").innerHTML = Object.entries(metrics)
     .map(([key, value]) => `
       <div class="metric">
-        <div><span>${labels[key]}</span><strong>${value}</strong></div>
-        <meter min="0" max="100" value="${value}"></meter>
+        <div><span>${escapeHtml(labels[key] || key)}</span><strong>${escapeHtml(value)}</strong></div>
+        ${Number.isFinite(value) ? `<meter min="0" max="100" value="${clampPercent(value)}"></meter>` : ""}
       </div>
     `)
     .join("");
@@ -67,8 +67,8 @@ function renderBars(selector, items) {
   document.querySelector(selector).innerHTML = items
     .map((item) => `
       <div class="bar-row">
-        <div class="bar-label"><strong>${item.name}</strong><span>${item.percent}%</span></div>
-        <div class="bar-track"><span style="width:${item.percent}%"></span></div>
+        <div class="bar-label"><strong>${escapeHtml(item.name)}</strong><span>${clampPercent(item.percent)}%</span></div>
+        <div class="bar-track"><span style="width:${clampPercent(item.percent)}%"></span></div>
       </div>
     `)
     .join("");
@@ -76,7 +76,7 @@ function renderBars(selector, items) {
 
 function renderChips(selector, items) {
   document.querySelector(selector).innerHTML = items
-    .map((item) => `<span class="chip">${item.name} <strong>${item.percent}%</strong></span>`)
+    .map((item) => `<span class="chip">${escapeHtml(item.name)} <strong>${clampPercent(item.percent)}%</strong></span>`)
     .join("");
 }
 
@@ -86,8 +86,8 @@ function renderTracks(tracks) {
       <div class="rank-item">
         <span>${index + 1}</span>
         <div>
-          <strong>${track.name}</strong>
-          <small>${track.artist || "Unknown artist"}</small>
+          <strong>${escapeHtml(track.name)}</strong>
+          <small>${escapeHtml(track.artist || "Unknown artist")}</small>
         </div>
       </div>
     `)
@@ -98,10 +98,10 @@ function renderCritics(critics) {
   document.querySelector("#critics").innerHTML = critics
     .map((critic) => `
       <div class="rank-item">
-        <span>${critic.match}</span>
+        <span>${clampPercent(critic.match)}</span>
         <div>
-          <strong>${critic.name}</strong>
-          <small>${critic.note}</small>
+          <strong>${escapeHtml(critic.name)}</strong>
+          <small>${escapeHtml(critic.note)}</small>
         </div>
       </div>
     `)
@@ -157,16 +157,30 @@ async function loadMedia(query) {
     container.innerHTML = "<p class=\"muted\">연결된 정보 소스가 아직 없어. API 키나 RSS 주소를 설정하면 여기에 표시돼.</p>";
     return;
   }
-  container.innerHTML = data.items.map((item) => `
-    <a class="media-item" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">
-      ${item.image ? `<img src="${escapeHtml(item.image)}" alt="">` : ""}
+  container.innerHTML = data.items.filter((item) => safeHttpUrl(item.url)).map((item) => `
+    <a class="media-item" href="${escapeHtml(safeHttpUrl(item.url))}" target="_blank" rel="noopener noreferrer">
+      ${safeHttpUrl(item.image) ? `<img src="${escapeHtml(safeHttpUrl(item.image))}" alt="">` : ""}
       <div><small>${escapeHtml(item.source)} · ${item.type === "video" ? "영상" : item.type === "social" ? "소셜" : "기사"}</small><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.description || "")}</p></div>
     </a>
   `).join("");
 }
 
 function escapeHtml(value) {
-  return String(value || "").replace(/[&<>'"]/g, (character) => ({
+  return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
   }[character]));
+}
+
+function clampPercent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, Math.round(number))) : 0;
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value || ""), window.location.origin);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+  } catch {
+    return "";
+  }
 }
