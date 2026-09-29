@@ -7,9 +7,13 @@
 // - Last.fm (optional, LASTFM_API_KEY): listener and play counts.
 
 import { criticSourceFor, normalizeKey, parseReviewScore } from "./score.js";
+import { bestTitleMatch, pickArtist, searchTitle } from "./match.js";
 
 const FETCH_TIMEOUT_MS = 12000;
 const MAX_RETRIES = 2;
+const ARTIST_CACHE_TTL_MS = 60 * 60 * 1000;
+const ARTIST_CACHE_MAX = 500;
+const MAX_BROWSE_PAGES = 3;
 const hostQueues = new Map();
 
 // Minimum spacing between requests per host, from each API's published limits.
@@ -29,6 +33,8 @@ export class SourceError extends Error {
 
 export function createSources({ contact, discogsToken, lastfmKey } = {}) {
   const userAgent = `MusicAbility/0.1 ( ${contact || "https://github.com/bammbiy/music-ability"} )`;
+  // Artist ID and release-group list per artist, reused across that artist's albums.
+  const artistCache = new Map();
 
   async function getJson(url, { headers = {}, source } = {}, attempt = 0) {
     const host = new URL(url).hostname;
@@ -55,13 +61,13 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
   }
 
   async function musicbrainz(artist, album) {
-    const query = `releasegroup:"${luceneEscape(album)}" AND artist:"${luceneEscape(artist)}"`;
+    const query = `releasegroup:"${luceneEscape(searchTitle(album))}" AND artist:"${luceneEscape(artist)}"`;
     const search = await getJson(
       `https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=5&query=${encodeURIComponent(query)}`,
       { source: "musicbrainz" }
     );
     let match = pickReleaseGroup(search?.["release-groups"] || [], artist, album);
-    if (!match) match = await findByArtistAlias(artist, album);
+    if (!match) match = await findInArtistCatalog(artist, album);
     if (!match) return null;
 
     const detail = await getJson(
@@ -79,22 +85,46 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
     };
   }
 
-  // Streaming services often use a romanized or English artist name while
-  // MusicBrainz credits the original script (Fujii Kaze -> 藤井風). The artist
-  // search covers aliases, so resolve the artist ID and search by ID instead.
-  async function findByArtistAlias(artist, album) {
-    const artists = await getJson(
-      `https://musicbrainz.org/ws/2/artist/?fmt=json&limit=3&query=${encodeURIComponent(`artist:"${luceneEscape(artist)}" OR alias:"${luceneEscape(artist)}"`)}`,
-      { source: "musicbrainz" }
-    );
-    const found = (artists?.artists || []).find((candidate) => (candidate.score ?? 0) >= 90);
-    if (!found) return null;
-    const query = `releasegroup:"${luceneEscape(album)}" AND arid:${found.id}`;
+  // Fallback when the exact search misses. Streaming services often use a
+  // romanized or English artist name while MusicBrainz credits the original
+  // script (Fujii Kaze -> 藤井風), and titles differ in form ("1st Album" vs
+  // "1집"). Resolve the artist through its aliases, then fuzzy-match the title
+  // against that artist's own releases only, which keeps false matches rare.
+  async function findInArtistCatalog(artist, album) {
+    const catalog = await artistCatalog(artist);
+    if (!catalog) return null;
+    return bestTitleMatch(catalog.groups, album, [artist, ...catalog.names]);
+  }
+
+  async function artistCatalog(artist) {
+    const cacheKey = normalizeKey(artist);
+    const cached = artistCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
     const search = await getJson(
-      `https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=5&query=${encodeURIComponent(query)}`,
+      `https://musicbrainz.org/ws/2/artist/?fmt=json&limit=5&query=${encodeURIComponent(`artist:"${luceneEscape(artist)}" OR alias:"${luceneEscape(artist)}"`)}`,
       { source: "musicbrainz" }
     );
-    return (search?.["release-groups"] || []).find((group) => normalizeKey(group.title) === normalizeKey(album)) || null;
+    const found = pickArtist(search?.artists || [], artist);
+    let value = null;
+    if (found) {
+      const groups = [];
+      for (let page = 0; page < MAX_BROWSE_PAGES; page += 1) {
+        const data = await getJson(
+          `https://musicbrainz.org/ws/2/release-group?fmt=json&limit=100&offset=${page * 100}&type=album|ep|single&artist=${found.id}`,
+          { source: "musicbrainz" }
+        );
+        const batch = data?.["release-groups"] || [];
+        groups.push(...batch);
+        if (groups.length >= (data?.["release-group-count"] ?? 0) || batch.length < 100) break;
+      }
+      const names = [found.name, found["sort-name"], ...(found.aliases || []).map((alias) => alias.name)].filter(Boolean);
+      value = { id: found.id, names, groups };
+    }
+
+    if (artistCache.size >= ARTIST_CACHE_MAX) artistCache.delete(artistCache.keys().next().value);
+    artistCache.set(cacheKey, { value, expiresAt: Date.now() + ARTIST_CACHE_TTL_MS });
+    return value;
   }
 
   async function wikidataCritics(mbid) {

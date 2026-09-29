@@ -97,19 +97,38 @@ test("reports error when the network fails, so it is retried sooner", { timeout:
   }
 });
 
-test("falls back to artist aliases when the credit uses another script", { timeout: 20000 }, async () => {
+test("falls back to the artist catalog when names and titles are written differently", { timeout: 30000 }, async () => {
   const mock = mockFetch([
-    [/release-group\/\?.*arid/, { "release-groups": [{ id: "rg-kaze", score: 100, title: "LOVE ALL SERVE ALL", "first-release-date": "2022-03-23", "artist-credit": [{ name: "藤井風" }] }] }],
     [/musicbrainz\.org\/ws\/2\/release-group\/\?/, { "release-groups": [] }],
-    [/musicbrainz\.org\/ws\/2\/artist\//, { artists: [{ id: "a-kaze", score: 100, name: "藤井風" }] }],
-    [/musicbrainz\.org\/ws\/2\/release-group\/rg-kaze/, { rating: { value: 4.5, "votes-count": 3 } }],
+    [/musicbrainz\.org\/ws\/2\/artist\//, {
+      artists: [
+        { id: "son", score: 100, name: "[Hikaru Utada’s son]" },
+        { id: "a-jang", score: 100, name: "장범준", "sort-name": "Jang, Beom June", aliases: [{ name: "Jang Beom June" }] }
+      ]
+    }],
+    [/release-group\?.*artist=a-jang/, {
+      "release-group-count": 3,
+      "release-groups": [
+        { id: "rg-3", title: "장범준 3집", "primary-type": "Album", "first-release-date": "2019-03-21" },
+        { id: "rg-1", title: "장범준 1집", "primary-type": "Album", "first-release-date": "2014-08-19" },
+        { id: "rg-s", title: "아파트", "primary-type": "Single", "first-release-date": "2024-11-13" }
+      ]
+    }],
+    [/musicbrainz\.org\/ws\/2\/release-group\/rg-1/, { rating: { value: 4, "votes-count": 3 } }],
     [/query\.wikidata\.org/, { results: { bindings: [] } }]
   ]);
   try {
-    const { status, record } = await createSources().collect({ key: "fujii kaze::love all serve all", artist: "Fujii Kaze", album: "LOVE ALL SERVE ALL" });
+    const sources = createSources();
+    const { status, record } = await sources.collect({ key: "k", artist: "Jang Beom June", album: "Jang Beom June 1st Album" });
     assert.equal(status, "ok");
-    assert.equal(record.mbid, "rg-kaze");
-    assert.equal(record.releaseDate, "2022-03-23");
+    assert.equal(record.mbid, "rg-1");
+    assert.equal(record.releaseDate, "2014-08-19");
+
+    // A second album by the same artist reuses the cached catalog.
+    const before = mock.calls.filter((call) => call.url.includes("/artist/")).length;
+    await sources.collect({ key: "k3", artist: "Jang Beom June", album: "Jang Beom June 3rd Album" });
+    const after = mock.calls.filter((call) => call.url.includes("/artist/")).length;
+    assert.equal(after, before);
   } finally {
     mock.restore();
   }

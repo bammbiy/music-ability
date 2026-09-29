@@ -14,7 +14,7 @@ Music Ability analyzes a user's music taste (genre spread, depth, discovery) fro
 
 - `server/app.js`: HTTP server, routing, Spotify OAuth, Apple Music, media feed.
 - `server/analysis.js`: pure analysis engine (`buildAnalysis`), metric weights (`SCORE_WEIGHTS`).
-- `server/acclaim/`: album critic/listener scores. `score.js` (pure parsing, normalization, calibration), `sources.js` (MusicBrainz, Wikidata, Discogs, Last.fm fetchers), `index.js` (cache + background queue).
+- `server/acclaim/`: album critic/listener scores. `score.js` (pure parsing, normalization, calibration), `match.js` (pure title/artist matching), `sources.js` (MusicBrainz, Wikidata, Discogs, Last.fm fetchers), `index.js` (cache + background queue).
 - `tests/`: `node --test` unit tests; external APIs are mocked.
 - `server/store.js`: `node:sqlite` storage for consented quality data and the public album score cache (`data/music-ability.sqlite`, git-ignored).
 - `public/`: landing page (`index.html`, `js/home.js`) and dashboard (`dashboard.html`, `js/app.js`).
