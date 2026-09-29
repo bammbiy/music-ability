@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/app.js",
     "check": "node --check server/app.js && node --check server/analysis.js && node --check server/acclaim/index.js && node --check public/js/app.js && node --check public/js/home.js",
-    "test": "node --test \"tests/**/*.test.js\""
+    "test": "node --test \"tests/**/*.test.js\"",
+    "probe": "node --env-file-if-exists=.env scripts/probe-acclaim.mjs"
   },
   "engines": {
     "node": ">=24"
