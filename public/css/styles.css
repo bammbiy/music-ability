@@ -593,6 +593,11 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+.album-score.is-audience {
+  background: var(--plate-lo);
+  color: var(--ink);
+}
+
 .album-list strong {
   display: block;
   font-weight: 700;

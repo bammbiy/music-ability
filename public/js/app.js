@@ -11,7 +11,7 @@ const metricInfo = {
   discovery: { name: "발견 성향", help: "덜 알려진 아티스트를 많이 들을수록 높아요." },
   concentration: { name: "취향 확장성", help: "한 아티스트에 몰리지 않을수록 높아요." },
   newReleaseSense: { name: "신보 감도", help: "최근 6개월 안에 나온 음악을 들을수록 높아요." },
-  criticTaste: { name: "평단 감각", help: "평론가가 높게 평가한 앨범을 들을수록 높아요." },
+  criticTaste: { name: "평단 감각", help: "평론가나 음악 커뮤니티가 높게 평가한 앨범을 들을수록 높아요." },
   hiddenGems: { name: "숨은 명반 발굴", help: "평단 평가는 높은데 덜 알려진 앨범을 들을수록 높아요." },
   mainstream: { name: "대중성", help: "인기 있는 곡을 많이 들을수록 높아요." }
 };
@@ -169,7 +169,7 @@ function renderAcclaim(acclaim, isSample) {
   const list = document.querySelector("#acclaim-albums");
   if (!acclaim) return;
 
-  const found = `자주 듣는 앨범 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장의 평가를 찾았어요.`;
+  const found = `자주 듣는 앨범 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장의 평가를 찾았어요. 검은 칸은 평론 점수, 회색 칸은 평론 점수가 없어 청취자 평점으로 대신한 앨범이에요.`;
   const notes = {
     ready: found,
     updating: `${found} 나머지 ${acclaim.pending}장은 모으는 중이고, 화면은 자동으로 갱신돼요.`,
@@ -195,11 +195,11 @@ function renderAcclaim(acclaim, isSample) {
       ].filter(Boolean).join(", ");
       return `
         <li>
-          <span class="album-score" aria-label="평단 점수 ${Math.round(album.criticScore)}">${Math.round(album.criticScore)}</span>
+          <span class="album-score${album.qualityBasis === "audience" ? " is-audience" : ""}" aria-label="${album.qualityBasis === "audience" ? "청취자 평점" : "평단 점수"} ${Math.round(album.qualityScore)}">${Math.round(album.qualityScore)}</span>
           <div>
             <strong>${escapeHtml(album.album)}${album.gem ? ' <em class="gem">숨은 명반</em>' : ""}</strong>
             <small>${escapeHtml(album.artist)}${facts ? `, ${facts}` : ""}</small>
-            ${critics ? `<small class="album-critics">${critics}</small>` : ""}
+            <small class="album-critics">${critics || "평론 점수가 없어 MusicBrainz 청취자 평점으로 계산했어요."}</small>
           </div>
         </li>
       `;

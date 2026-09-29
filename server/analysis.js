@@ -169,7 +169,7 @@ function buildSummary(score, buckets, genres, concentration, acclaimResult) {
   const detail = genres[0]?.name || "genre exploration";
   const stance = concentration >= 70 ? "여러 아티스트를 폭넓게 찾아 듣는 편이에요." : "좋아하는 아티스트를 깊게 파고드는 편이에요.";
   const critic = acclaimResult.report.status === "ready"
-    ? ` 자주 듣는 앨범의 평단 점수는 평균 ${Math.round(acclaimResult.averageCritic)}점이에요.`
+    ? ` 자주 듣는 앨범의 평단·청취자 평가는 평균 ${Math.round(acclaimResult.averageCritic)}점이에요.`
     : "";
   return `${mainBucket} 채널이 가장 크고, 세부적으로는 ${detail} 취향이 두드러져요. ${stance}${critic} 점수 ${score}점은 음악 실력의 순위가 아니라 장르 다양성, 감상 깊이, 새 음악을 찾는 성향, 평단이 주목한 음악을 듣는 정도를 합친 값이에요.`;
 }
@@ -251,9 +251,10 @@ function parseReleaseDate(value) {
   return Number.isFinite(time) ? time : null;
 }
 
-// Critic-based metrics from album acclaim data.
-// criticTaste: rank-weighted average critic score of the albums listened to.
-// hiddenGems: share of listening on albums critics rate highly but few people play.
+// Acclaim metrics from album data. Each album uses its critic score, or its
+// community rating when no critic score exists (qualityScore).
+// criticTaste: rank-weighted average quality score of the albums listened to.
+// hiddenGems: share of listening on highly rated albums that few people play.
 export function acclaimMetrics(tracks, acclaim) {
   const empty = (status, extra = {}) => ({
     criticTaste: null,
@@ -276,12 +277,12 @@ export function acclaimMetrics(tracks, acclaim) {
     if (!key) return;
     totalWeight += weight;
     const summary = acclaim.summaries.get(key);
-    if (!summary || !Number.isFinite(summary.criticScore)) return;
+    if (!summary || !Number.isFinite(summary.qualityScore)) return;
 
     coveredWeight += weight;
-    criticSum += summary.criticScore * weight;
+    criticSum += summary.qualityScore * weight;
     const popularity = Number.isFinite(summary.popularity) ? summary.popularity : track.popularity;
-    const gem = summary.criticScore >= GEM_MIN_CRITIC && Number.isFinite(popularity) && popularity < GEM_MAX_POPULARITY;
+    const gem = summary.qualityScore >= GEM_MIN_CRITIC && Number.isFinite(popularity) && popularity < GEM_MAX_POPULARITY;
     if (gem) gemWeight += weight;
 
     const entry = albums.get(key) || { ...summary, popularity: Number.isFinite(popularity) ? Math.round(popularity) : null, gem, weight: 0 };

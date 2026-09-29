@@ -26,14 +26,18 @@ const musicbrainzSearch = {
   ]
 };
 const musicbrainzDetail = { id: MBID, rating: { value: 4.65, "votes-count": 120 }, genres: [{ name: "alternative rock" }] };
+const wd = (qid) => ({ value: `http://www.wikidata.org/entity/${qid}` });
 const wikidata = {
   results: {
     bindings: [
-      { raw: { value: "100/100" }, byLabel: { value: "Pitchfork" } },
-      { raw: { value: "5/5" }, byLabel: { value: "AllMusic" } },
-      { raw: { value: "A-" }, byLabel: { value: "Robert Christgau" } },
-      { raw: { value: "unparsable" }, byLabel: { value: "Somewhere" } },
-      { raw: { value: "9/10" }, byLabel: { value: "Q12345" } }
+      { raw: { value: "10" }, by: wd("Q721140"), byLabel: { value: "Pitchfork" } },
+      { raw: { value: "5" }, by: wd("Q31181"), byLabel: { value: "AllMusic" } },
+      { raw: { value: "A-" }, by: wd("Q1397563"), byLabel: { value: "Robert Christgau" } },
+      { raw: { value: "94" }, by: wd("Q48989591"), byLabel: { value: "Album of the Year" } },
+      { raw: { value: "8.2" }, by: wd("Q99999"), byLabel: { value: "Spin" } },
+      { raw: { value: "9/10" }, by: wd("Q37312"), byLabel: { value: "IMDb" } },
+      { raw: { value: "97%" }, by: wd("Q105584"), byLabel: { value: "Rotten Tomatoes" } },
+      { raw: { value: "4/5" }, by: wd("Q12345"), byLabel: { value: "Q12345" } }
     ]
   }
 };
@@ -56,7 +60,8 @@ test("collects identity, critic scores and ratings from open sources", { timeout
     assert.equal(record.mbid, MBID, "picks the exact title match, not the reissue");
     assert.equal(record.releaseDate, "1997-05-21");
     assert.equal(record.musicbrainz.rating, 93);
-    assert.deepEqual(record.critics.map((review) => [review.source, review.score]), [["pitchfork", 100], ["allmusic", 100], ["robert christgau", 90]]);
+    // Film/game outlets and unknown reviewers are dropped; Spin's bare "8.2" has no known scale.
+    assert.deepEqual(record.critics.map((review) => [review.source, review.score]), [["pitchfork", 100], ["allmusic", 100], ["robert christgau", 90], ["album of the year", 94]]);
     assert.equal(record.discogs.rating, 92);
     assert.equal(record.discogs.have, 90000);
     assert.equal(record.lastfm.listeners, 3000000);
@@ -89,5 +94,43 @@ test("reports error when the network fails, so it is retried sooner", { timeout:
     assert.match(error, /musicbrainz/);
   } finally {
     mock.restore();
+  }
+});
+
+test("falls back to artist aliases when the credit uses another script", { timeout: 20000 }, async () => {
+  const mock = mockFetch([
+    [/release-group\/\?.*arid/, { "release-groups": [{ id: "rg-kaze", score: 100, title: "LOVE ALL SERVE ALL", "first-release-date": "2022-03-23", "artist-credit": [{ name: "藤井風" }] }] }],
+    [/musicbrainz\.org\/ws\/2\/release-group\/\?/, { "release-groups": [] }],
+    [/musicbrainz\.org\/ws\/2\/artist\//, { artists: [{ id: "a-kaze", score: 100, name: "藤井風" }] }],
+    [/musicbrainz\.org\/ws\/2\/release-group\/rg-kaze/, { rating: { value: 4.5, "votes-count": 3 } }],
+    [/query\.wikidata\.org/, { results: { bindings: [] } }]
+  ]);
+  try {
+    const { status, record } = await createSources().collect({ key: "fujii kaze::love all serve all", artist: "Fujii Kaze", album: "LOVE ALL SERVE ALL" });
+    assert.equal(status, "ok");
+    assert.equal(record.mbid, "rg-kaze");
+    assert.equal(record.releaseDate, "2022-03-23");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("retries when MusicBrainz asks to slow down", { timeout: 20000 }, async () => {
+  let calls = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("musicbrainz")) {
+      calls += 1;
+      if (calls === 1) return new Response("slow down", { status: 503, headers: { "Retry-After": "1" } });
+      return new Response(JSON.stringify({ "release-groups": [], artists: [] }), { status: 200 });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  try {
+    const { status } = await createSources().collect({ key: "a::b", artist: "A", album: "B" });
+    assert.equal(status, "not_found");
+    assert.ok(calls >= 2);
+  } finally {
+    globalThis.fetch = original;
   }
 });

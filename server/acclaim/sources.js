@@ -6,9 +6,10 @@
 // - Discogs (optional, DISCOGS_TOKEN): community rating, have/want counts.
 // - Last.fm (optional, LASTFM_API_KEY): listener and play counts.
 
-import { normalizeKey, parseReviewScore } from "./score.js";
+import { criticSourceFor, normalizeKey, parseReviewScore } from "./score.js";
 
 const FETCH_TIMEOUT_MS = 12000;
+const MAX_RETRIES = 2;
 const hostQueues = new Map();
 
 // Minimum spacing between requests per host, from each API's published limits.
@@ -29,7 +30,7 @@ export class SourceError extends Error {
 export function createSources({ contact, discogsToken, lastfmKey } = {}) {
   const userAgent = `MusicAbility/0.1 ( ${contact || "https://github.com/bammbiy/music-ability"} )`;
 
-  async function getJson(url, { headers = {}, source } = {}) {
+  async function getJson(url, { headers = {}, source } = {}, attempt = 0) {
     const host = new URL(url).hostname;
     await throttle(host);
     let response;
@@ -42,6 +43,13 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
       throw new SourceError(source, `network ${error.name}`);
     }
     if (response.status === 404) return null;
+    // 503/429 mean "slow down" (MusicBrainz answers 503 when over its rate limit).
+    if ((response.status === 503 || response.status === 429) && attempt < MAX_RETRIES) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 30) * 1000 : 2000 * (attempt + 1);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      return getJson(url, { headers, source }, attempt + 1);
+    }
     if (!response.ok) throw new SourceError(source, `http ${response.status}`);
     return response.json();
   }
@@ -52,7 +60,8 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
       `https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=5&query=${encodeURIComponent(query)}`,
       { source: "musicbrainz" }
     );
-    const match = pickReleaseGroup(search?.["release-groups"] || [], artist, album);
+    let match = pickReleaseGroup(search?.["release-groups"] || [], artist, album);
+    if (!match) match = await findByArtistAlias(artist, album);
     if (!match) return null;
 
     const detail = await getJson(
@@ -70,9 +79,27 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
     };
   }
 
+  // Streaming services often use a romanized or English artist name while
+  // MusicBrainz credits the original script (Fujii Kaze -> 藤井風). The artist
+  // search covers aliases, so resolve the artist ID and search by ID instead.
+  async function findByArtistAlias(artist, album) {
+    const artists = await getJson(
+      `https://musicbrainz.org/ws/2/artist/?fmt=json&limit=3&query=${encodeURIComponent(`artist:"${luceneEscape(artist)}" OR alias:"${luceneEscape(artist)}"`)}`,
+      { source: "musicbrainz" }
+    );
+    const found = (artists?.artists || []).find((candidate) => (candidate.score ?? 0) >= 90);
+    if (!found) return null;
+    const query = `releasegroup:"${luceneEscape(album)}" AND arid:${found.id}`;
+    const search = await getJson(
+      `https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=5&query=${encodeURIComponent(query)}`,
+      { source: "musicbrainz" }
+    );
+    return (search?.["release-groups"] || []).find((group) => normalizeKey(group.title) === normalizeKey(album)) || null;
+  }
+
   async function wikidataCritics(mbid) {
     const sparql = `
-      SELECT ?raw ?byLabel WHERE {
+      SELECT ?raw ?by ?byLabel WHERE {
         ?album wdt:P436 "${mbid.replace(/[^0-9a-f-]/gi, "")}" .
         ?album p:P444 ?statement .
         ?statement ps:P444 ?raw .
@@ -86,15 +113,14 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
     const critics = [];
     const seen = new Set();
     for (const row of data?.results?.bindings || []) {
-      const label = row.byLabel?.value || "";
+      const qid = String(row.by?.value || "").split("/").pop();
+      const outlet = criticSourceFor(qid, row.byLabel?.value);
+      if (!outlet || seen.has(outlet.key)) continue;
       const raw = row.raw?.value || "";
-      const score = parseReviewScore(raw);
-      // Skip unnamed or unparsable scores, and Wikidata's placeholder labels (Q-ids).
-      if (!label || /^Q\d+$/.test(label) || score === null) continue;
-      const source = label.toLowerCase();
-      if (seen.has(source)) continue;
-      seen.add(source);
-      critics.push({ source, label, raw, score });
+      const score = parseReviewScore(raw, outlet.scale);
+      if (score === null) continue;
+      seen.add(outlet.key);
+      critics.push({ source: outlet.key, label: outlet.name, raw, score });
     }
     return critics;
   }

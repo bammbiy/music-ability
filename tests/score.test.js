@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   albumKey,
   calibrateScore,
+  criticSourceFor,
   learnSourceCalibration,
   parseReviewScore,
   popularityFromListeners,
@@ -22,6 +23,23 @@ test("parses the review score formats found on Wikidata", () => {
   assert.equal(parseReviewScore("11/10"), null);
   assert.equal(parseReviewScore("great"), null);
   assert.equal(parseReviewScore(""), null);
+});
+
+test("bare numbers need the outlet's scale", () => {
+  assert.equal(parseReviewScore("4.5", 5), 90);
+  assert.equal(parseReviewScore("94", 100), 94);
+  assert.equal(parseReviewScore("7.6", 10), 76);
+  assert.equal(parseReviewScore("4.5"), null);
+  assert.equal(parseReviewScore("12", 10), null);
+  assert.equal(parseReviewScore("73.16%"), 73.2);
+  assert.equal(parseReviewScore("tbd/100", 100), null);
+});
+
+test("only music outlets are accepted", () => {
+  assert.equal(criticSourceFor("Q31181", "AllMusic").key, "allmusic");
+  assert.equal(criticSourceFor("Q0", "Robert Christgau").key, "robert christgau");
+  assert.equal(criticSourceFor("Q37312", "IMDb"), null);
+  assert.equal(criticSourceFor("Q207708", "IGN"), null);
 });
 
 test("album keys ignore case, punctuation and edition suffixes", () => {

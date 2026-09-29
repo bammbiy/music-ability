@@ -57,7 +57,7 @@ test("disabled acclaim leaves critic metrics out of the score", () => {
   const withData = buildAnalysis({ tracks, artists: [], generatedAt: "2024-06-01T00:00:00Z" }, { acclaim: acclaimFor(records) });
   assert.ok(Number.isFinite(withData.metrics.criticTaste));
   assert.ok(withData.weights.criticTaste > 0);
-  assert.match(withData.summary, /평단 점수/);
+  assert.match(withData.summary, /평단·청취자 평가/);
 });
 
 test("percentile needs a large enough population", () => {
@@ -71,4 +71,12 @@ test("network failures are reported separately from missing data", () => {
   const result = acclaimMetrics(tracks, { summaries: new Map(), pending: 0, notFound: 0, failed: 4, total: 4, enabled: true });
   assert.equal(result.report.status, "unreachable");
   assert.equal(result.criticTaste, null);
+});
+
+test("community ratings stand in when no critic score exists", () => {
+  const audienceOnly = records.map(({ critics, ...record }) => ({ ...record, musicbrainz: { rating: 90, votes: 200 } }));
+  const result = acclaimMetrics(tracks, acclaimFor(audienceOnly));
+  assert.equal(result.report.status, "ready");
+  assert.ok(result.criticTaste > 0);
+  assert.equal(result.report.albums[0].qualityBasis, "audience");
 });

@@ -10,20 +10,55 @@ const LETTER_GRADES = {
   E: 35, F: 30
 };
 
-// Sources that publish their own editorial or aggregated critic score.
-// Metacritic is already an aggregate of many reviews, so it counts more.
-export const CRITIC_SOURCE_WEIGHTS = {
-  metacritic: 2,
-  pitchfork: 1,
-  allmusic: 1,
-  "rolling stone": 1,
-  "the guardian": 1,
-  nme: 1,
-  "robert christgau": 1,
-  "consequence": 1,
-  "entertainment weekly": 1,
-  "slant magazine": 1
+// Music outlets accepted from Wikidata review scores (P444), keyed by the
+// Wikidata item of the reviewer (qualifier P447). Anything else is ignored:
+// Wikidata also attaches film and game scores (IMDb, Rotten Tomatoes, IGN...)
+// to soundtrack items, and those say nothing about music.
+//
+// `scale` is the maximum used when Wikidata stores a bare number without "/10"
+// (for example AllMusic "4.5" means 4.5 of 5). Null means bare numbers are
+// ambiguous for that outlet and are skipped; fractions and letters still work.
+// Aggregators combine many reviews, so they count twice.
+export const CRITIC_SOURCES = {
+  Q150248: { key: "metacritic", name: "Metacritic", scale: 100, weight: 2 },
+  Q48989591: { key: "album of the year", name: "Album of the Year", scale: 100, weight: 2 },
+  Q4778122: { key: "anydecentmusic", name: "AnyDecentMusic?", scale: 10, weight: 2 },
+  Q31181: { key: "allmusic", name: "AllMusic", scale: 5, weight: 1 },
+  Q721140: { key: "pitchfork", name: "Pitchfork", scale: 10, weight: 1 },
+  Q33511: { key: "rolling stone", name: "Rolling Stone", scale: 5, weight: 1 },
+  Q11148: { key: "the guardian", name: "The Guardian", scale: 5, weight: 1 },
+  Q192632: { key: "nme", name: "NME", scale: 5, weight: 1 },
+  Q5375715: { key: "encyclopedia of popular music", name: "Encyclopedia of Popular Music", scale: 5, weight: 1 },
+  Q743133: { key: "scott yanow", name: "Scott Yanow", scale: 5, weight: 1 },
+  Q43281: { key: "kerrang", name: "Kerrang!", scale: 5, weight: 1 },
+  Q1388362: { key: "sputnikmusic", name: "Sputnikmusic", scale: 5, weight: 1 },
+  Q248283: { key: "metal hammer", name: "Metal Hammer", scale: null, weight: 1 },
+  Q1322364: { key: "popmatters", name: "PopMatters", scale: 10, weight: 1 },
+  Q275033: { key: "entertainment weekly", name: "Entertainment Weekly", scale: null, weight: 1 },
+  Q9531: { key: "bbc", name: "BBC", scale: 5, weight: 1 },
+  Q18680052: { key: "soundi", name: "Soundi", scale: 5, weight: 1 },
+  Q366921: { key: "helsingin sanomat", name: "Helsingin Sanomat", scale: 5, weight: 1 },
+  Q109368868: { key: "thrashocore", name: "Thrashocore", scale: 10, weight: 1 },
+  Q1111380: { key: "digital spy", name: "Digital Spy", scale: 5, weight: 1 }
 };
+
+// Music outlets matched by English label when their Wikidata item is not in
+// the table above. Bare numbers are skipped for these (scale unknown).
+const CRITIC_SOURCE_NAMES = new Set([
+  "robert christgau", "slant magazine", "spin", "q", "mojo", "uncut", "consequence",
+  "consequence of sound", "exclaim!", "the independent", "the observer", "the daily telegraph",
+  "clash", "the line of best fit", "tiny mix tapes", "paste", "drowned in sound", "musicomh",
+  "the a.v. club", "under the radar", "loud and quiet", "the skinny", "dork", "diy", "the quietus"
+]);
+
+export function criticSourceFor(qid, label) {
+  if (CRITIC_SOURCES[qid]) return CRITIC_SOURCES[qid];
+  const name = String(label || "").toLowerCase();
+  if (CRITIC_SOURCE_NAMES.has(name)) return { key: name, name: label, scale: null, weight: 1 };
+  return null;
+}
+
+const SOURCE_WEIGHT_BY_KEY = Object.fromEntries(Object.values(CRITIC_SOURCES).map((source) => [source.key, source.weight]));
 
 const PRIOR_MEAN = 70;
 const PRIOR_VOTES = 10;
@@ -44,11 +79,18 @@ export function albumKey(artist, album) {
   return a && b ? `${a}::${b}` : "";
 }
 
-// Parses review score strings like "8.5/10", "4 / 5", "86/100", "A-", "★★★★½".
+// Parses review score strings like "8.5/10", "4 / 5", "86/100", "73%", "A-",
+// "★★★★½", and bare numbers when the outlet's scale is known.
 // Returns a 0-100 number or null when the format is not understood.
-export function parseReviewScore(raw) {
+export function parseReviewScore(raw, bareScale = null) {
   const value = String(raw ?? "").trim();
   if (!value) return null;
+
+  const percent = value.match(/^(\d+(?:[.,]\d+)?)\s*%$/);
+  if (percent) {
+    const score = Number(percent[1].replace(",", "."));
+    return score <= 100 ? round1(score) : null;
+  }
 
   const fraction = value.match(/^(\d+(?:[.,]\d+)?)\s*(?:\/|out of)\s*(\d+(?:[.,]\d+)?)/i);
   if (fraction) {
@@ -64,6 +106,12 @@ export function parseReviewScore(raw) {
   const stars = [...value].filter((character) => character === "★").length;
   const half = value.includes("½") ? 0.5 : 0;
   if (stars > 0) return round1(((stars + half) / 5) * 100);
+
+  const bare = value.match(/^(\d+(?:[.,]\d+)?)$/);
+  if (bare && bareScale) {
+    const score = Number(bare[1].replace(",", "."));
+    return score <= bareScale ? round1((score / bareScale) * 100) : null;
+  }
 
   return null;
 }
@@ -126,7 +174,7 @@ export function summarizeAlbum(record, calibration = {}) {
     let weighted = 0;
     let weights = 0;
     for (const review of critics) {
-      const weight = CRITIC_SOURCE_WEIGHTS[review.source] || 1;
+      const weight = SOURCE_WEIGHT_BY_KEY[review.source] || 1;
       weighted += calibrateScore(review.source, review.score, calibration) * weight;
       weights += weight;
     }
@@ -145,6 +193,9 @@ export function summarizeAlbum(record, calibration = {}) {
     : null;
 
   const popularity = popularityFromListeners(record.lastfm?.listeners);
+  // Critic coverage on open data is thin outside well-known Western albums, so
+  // the community rating stands in when no critic score exists.
+  const qualityBasis = criticScore !== null ? "critic" : audienceScore !== null ? "audience" : null;
 
   return {
     key: record.key,
@@ -155,6 +206,8 @@ export function summarizeAlbum(record, calibration = {}) {
     criticCount: critics.length,
     critics: critics.map((review) => ({ source: review.source, label: review.label || review.source, raw: review.raw, score: review.score })),
     audienceScore,
+    qualityScore: qualityBasis === "critic" ? criticScore : audienceScore,
+    qualityBasis,
     popularity,
     collectorRatio: record.discogs?.have > 0 ? round1((record.discogs.want || 0) / record.discogs.have) : null,
     sources: record.sources || [],
