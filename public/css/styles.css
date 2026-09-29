@@ -1,27 +1,29 @@
 :root {
   color-scheme: light;
 
-  /* Faceplate */
-  --plate: #c8cdd1;
-  --plate-hi: #dde1e3;
-  --plate-lo: #b3bac0;
-  --ink: #1e2830;
-  --ink-soft: #46535d;
-  --well: #262d33;
+  /* Surfaces */
+  --plate: #eceef1;
+  --plate-hi: #ffffff;
+  --plate-lo: #dfe3e8;
+  --ink: #15181c;
+  --ink-soft: #5b636c;
+  --well: #17191d;
+  --well-line: #2c3036;
+  --well-text: #9aa3ad;
 
   /* Meter */
-  --lamp: #f1dca2;
-  --peak: #c8412f;
+  --signal: #3d7bff;
+  --peak: #ff4d3d;
 
   /* Fader caps, one per channel */
-  --cap-blue: #3f6db0;
-  --cap-yellow: #e0b43a;
-  --cap-green: #3f8a57;
-  --cap-red: #c8412f;
-  --cap-white: #ecebe6;
-  --cap-purple: #7456a3;
-  --cap-orange: #e08a2c;
-  --cap-grey: #6e7a83;
+  --cap-blue: #3d7bff;
+  --cap-yellow: #ffc53d;
+  --cap-green: #1fb574;
+  --cap-red: #ff4d3d;
+  --cap-white: #f5f6f7;
+  --cap-purple: #8b5cf6;
+  --cap-orange: #ff8a1f;
+  --cap-grey: #8a939c;
 
   --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 
@@ -106,9 +108,8 @@ a {
   min-height: 44px;
   padding: 0 18px;
   border: 1px solid var(--plate-lo);
-  border-radius: 6px;
-  background: linear-gradient(var(--plate-hi), var(--plate));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 2px 0 var(--plate-lo);
+  border-radius: 999px;
+  background: var(--plate-hi);
   color: var(--ink);
   font: inherit;
   font-weight: 650;
@@ -116,21 +117,23 @@ a {
   cursor: pointer;
 }
 
+.plate-button:hover {
+  border-color: var(--ink-soft);
+}
+
 .plate-button:active {
-  transform: translateY(2px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  transform: scale(0.98);
 }
 
 .plate-button.primary {
-  border-color: #1b1f23;
-  background: var(--well);
-  box-shadow: 0 2px 0 #11151a;
-  color: var(--cap-white);
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
 }
 
 .plate-button.quiet {
+  border-color: transparent;
   background: transparent;
-  box-shadow: none;
 }
 
 .text-button {
@@ -189,7 +192,8 @@ a {
   max-width: 34em;
   margin-top: 12px;
   padding: 12px 14px;
-  border-left: 3px solid var(--cap-yellow);
+  border-left: 3px solid var(--signal);
+  border-radius: 4px;
   background: var(--plate-hi);
   font-size: var(--step--1);
 }
@@ -214,9 +218,8 @@ a {
   display: flex;
   gap: 4px;
   padding: 16px 12px;
-  border-radius: 10px;
-  background: var(--plate-lo);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 2px 6px rgba(30, 40, 48, 0.25);
+  border-radius: 16px;
+  background: var(--well);
   overflow-x: auto;
 }
 
@@ -230,17 +233,17 @@ a {
   gap: 12px;
   min-width: 84px;
   padding: 12px 6px 14px;
-  border-radius: 6px;
-  background: var(--plate);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+  border-radius: 10px;
+  background: #202328;
+  color: #fff;
 }
 
 .strip-name {
   width: 100%;
   padding: 4px 6px;
-  border-radius: 2px;
-  background: var(--cap-white);
-  box-shadow: 0 1px 2px rgba(30, 40, 48, 0.25);
+  border-radius: 6px;
+  background: var(--well-line);
+  color: var(--cap-white);
   font-size: var(--step--1);
   font-weight: 650;
   line-height: 1.3;
@@ -256,8 +259,8 @@ a {
   width: 44px;
   height: 200px;
   background:
-    repeating-linear-gradient(to top, var(--ink-soft) 0 1px, transparent 1px 20px) left 2px bottom 14px / 8px calc(100% - 28px) no-repeat,
-    repeating-linear-gradient(to top, var(--ink-soft) 0 1px, transparent 1px 20px) right 2px bottom 14px / 8px calc(100% - 28px) no-repeat;
+    repeating-linear-gradient(to top, var(--well-line) 0 1px, transparent 1px 20px) left 2px bottom 14px / 8px calc(100% - 28px) no-repeat,
+    repeating-linear-gradient(to top, var(--well-line) 0 1px, transparent 1px 20px) right 2px bottom 14px / 8px calc(100% - 28px) no-repeat;
 }
 
 .fader::before {
@@ -266,10 +269,15 @@ a {
   top: 8px;
   bottom: 8px;
   left: 50%;
-  width: 6px;
-  border-radius: 3px;
-  background: var(--well);
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to top, var(--cap) 0 calc(var(--level) * 1%), #33373e 0);
   transform: translateX(-50%);
+  transition: background 900ms;
+}
+
+.mixer.is-off .fader::before {
+  background: #33373e;
 }
 
 .fader-cap {
@@ -278,12 +286,11 @@ a {
   bottom: calc(var(--level) * (100% - 28px) / 100);
   width: 34px;
   height: 28px;
-  border-radius: 4px;
+  border-radius: 8px;
   background:
-    linear-gradient(to bottom, transparent 12px, rgba(0, 0, 0, 0.45) 12px 14px, transparent 14px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.35), rgba(0, 0, 0, 0.15)),
+    linear-gradient(to bottom, transparent 13px, rgba(0, 0, 0, 0.35) 13px 15px, transparent 15px),
     var(--cap);
-  box-shadow: 0 3px 4px rgba(30, 40, 48, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
   transform: translateX(-50%);
   transition: bottom 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -321,9 +328,8 @@ a {
   display: grid;
   gap: 16px;
   padding: 24px;
-  border-radius: 10px;
+  border-radius: 20px;
   background: var(--plate-hi);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 1px 2px rgba(30, 40, 48, 0.15);
 }
 
 .section-head {
@@ -351,24 +357,19 @@ a {
   gap: 40px;
   align-items: center;
   padding: 32px;
-  border-radius: 12px;
+  border-radius: 24px;
   background: var(--well);
   color: var(--cap-white);
 }
 
 .vu {
-  padding: 14px;
-  border-radius: 8px;
-  background: #151a1e;
-  box-shadow: inset 0 0 0 1px #3a434a;
+  padding: 8px;
 }
 
 .vu-face {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 4px;
-  background: radial-gradient(ellipse at 50% 100%, #fff2c8 0%, var(--lamp) 55%, #d8bf7c 100%);
 }
 
 .vu-arc,
@@ -378,16 +379,28 @@ a {
 }
 
 .vu-arc {
-  stroke: var(--ink);
+  stroke: var(--well-line);
+  stroke-width: 10;
+  stroke-linecap: round;
 }
 
 .vu-arc-hot {
   stroke: var(--peak);
-  stroke-width: 5;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.vu-arc-value {
+  fill: none;
+  stroke: var(--signal);
+  stroke-width: 10;
+  stroke-linecap: round;
+  stroke-dasharray: 0 400;
+  transition: stroke-dasharray 1100ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .vu-tick {
-  stroke: var(--ink);
+  stroke: var(--well-text);
   stroke-width: 1.5;
 }
 
@@ -396,7 +409,7 @@ a {
 }
 
 .vu-num {
-  fill: var(--ink);
+  fill: var(--well-text);
   font-family: var(--font);
   font-size: 11px;
   font-weight: 650;
@@ -404,7 +417,7 @@ a {
 }
 
 .vu-needle {
-  stroke: var(--ink);
+  stroke: #fff;
   stroke-width: 2;
   stroke-linecap: round;
   transform-box: view-box;
@@ -414,11 +427,11 @@ a {
 }
 
 .vu-pivot {
-  fill: var(--well);
+  fill: #fff;
 }
 
 .master h1 {
-  color: #aab4bc;
+  color: var(--well-text);
   font-size: var(--step-0);
   font-weight: 650;
 }
@@ -439,7 +452,7 @@ a {
 }
 
 .master-score span {
-  color: #aab4bc;
+  color: var(--well-text);
   font-size: var(--step-1);
   font-weight: 600;
 }
@@ -447,17 +460,17 @@ a {
 .master-label {
   display: inline-block;
   margin-top: 12px;
-  padding: 2px 10px;
-  border-radius: 2px;
-  background: var(--cap-white);
-  color: var(--ink);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--signal);
+  color: #fff;
   font-weight: 700;
 }
 
 .master-summary {
   max-width: 36em;
   margin-top: 16px;
-  color: #d3d9dd;
+  color: #d5dae0;
   line-height: 1.7;
 }
 
@@ -483,7 +496,7 @@ a {
   height: 84px;
   border-radius: 50%;
   background:
-    conic-gradient(from 225deg, var(--ink) 0 calc(var(--v) * 2.7deg), var(--plate-lo) 0 270deg, transparent 0);
+    conic-gradient(from 225deg, var(--signal) 0 calc(var(--v) * 2.7deg), var(--plate-lo) 0 270deg, transparent 0);
   padding: 6px;
 }
 
@@ -492,8 +505,7 @@ a {
   position: absolute;
   inset: 6px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #4a545c, var(--well) 70%);
-  box-shadow: 0 3px 5px rgba(30, 40, 48, 0.45);
+  background: var(--well);
 }
 
 .knob::after {
@@ -505,7 +517,7 @@ a {
   height: 22px;
   margin-left: -1.5px;
   border-radius: 2px;
-  background: var(--cap-white);
+  background: #fff;
   transform-origin: 50% 30px;
   transform: rotate(calc(-135deg + var(--v) * 2.7deg));
 }
@@ -540,19 +552,10 @@ a {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  padding: 6px 12px;
-  border-radius: 2px;
-  background: var(--cap-white);
-  box-shadow: 0 1px 2px rgba(30, 40, 48, 0.25);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--plate);
   font-weight: 600;
-}
-
-.tape:nth-child(3n + 2) {
-  transform: rotate(-0.6deg);
-}
-
-.tape:nth-child(3n) {
-  transform: rotate(0.5deg);
 }
 
 .tape small {
@@ -585,7 +588,7 @@ a {
   gap: 12px;
   align-items: center;
   padding: 10px 0;
-  border-bottom: 1px solid var(--plate-lo);
+  border-bottom: 1px solid var(--plate);
 }
 
 .cue-list li:last-child,
@@ -618,8 +621,8 @@ a {
 .match-level {
   position: relative;
   height: 44px;
-  border-radius: 4px;
-  background: var(--well);
+  border-radius: 10px;
+  background: var(--plate);
   overflow: hidden;
 }
 
@@ -627,7 +630,7 @@ a {
   position: absolute;
   inset: auto 0 0;
   height: calc(var(--v, 0) * 1%);
-  background: repeating-linear-gradient(to top, var(--cap-green) 0 4px, transparent 4px 6px);
+  background: var(--signal);
 }
 
 /* Media */
@@ -641,8 +644,8 @@ a {
 .feedback-form select {
   min-height: 44px;
   border: 1px solid var(--plate-lo);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: 999px;
+  background: var(--plate);
   color: var(--ink);
   font: inherit;
 }
@@ -663,7 +666,7 @@ a {
   display: grid;
   gap: 8px;
   padding: 12px;
-  border-radius: 6px;
+  border-radius: 14px;
   background: var(--plate);
   text-decoration: none;
 }
@@ -675,7 +678,7 @@ a {
 .media-item img {
   width: 100%;
   aspect-ratio: 16 / 9;
-  border-radius: 4px;
+  border-radius: 8px;
   object-fit: cover;
 }
 
@@ -712,7 +715,7 @@ a {
 }
 
 .feedback-form select {
-  padding: 0 10px;
+  padding: 0 14px;
 }
 
 .feedback-status {
@@ -765,7 +768,9 @@ a {
 
 @media (prefers-reduced-motion: reduce) {
   .fader-cap,
-  .vu-needle {
+  .fader::before,
+  .vu-needle,
+  .vu-arc-value {
     transition: none;
   }
 }

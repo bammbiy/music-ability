@@ -45,6 +45,11 @@ function render(data) {
   document.querySelector("#listener-label").textContent = data.metrics?.label || "";
   document.querySelector("#summary").textContent = data.summary || "";
   document.querySelector("#vu-needle").style.transform = `rotate(${-VU_SWEEP + clampPercent(data.score) * (VU_SWEEP * 2) / 100}deg)`;
+  const valueArc = document.querySelector("#vu-value");
+  if (valueArc) {
+    const length = valueArc.getTotalLength();
+    valueArc.style.strokeDasharray = `${(length * clampPercent(data.score)) / 100} ${length + 10}`;
+  }
 
   renderChannels(data.buckets || []);
   renderKnobs(data.metrics || {});
@@ -66,7 +71,7 @@ function drawVuScale() {
     return `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} A ${radius} ${radius} 0 0 1 ${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
   };
 
-  let markup = `<path class="vu-arc" d="${arc(0, 100, 92)}"></path><path class="vu-arc-hot" d="${arc(80, 100, 95)}"></path>`;
+  let markup = `<path class="vu-arc" d="${arc(0, 100, 72)}"></path><path id="vu-value" class="vu-arc-value" d="${arc(0, 100, 72)}"></path><path class="vu-arc-hot" d="${arc(80, 100, 92)}"></path>`;
   for (let value = 0; value <= 100; value += 5) {
     const major = value % 20 === 0;
     const inner = point(value, major ? 82 : 86);
