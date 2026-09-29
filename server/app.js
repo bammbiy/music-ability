@@ -51,7 +51,8 @@ const mimeTypes = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
-  ".ico": "image/x-icon"
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2"
 };
 
 const securityHeaders = {
@@ -734,8 +735,8 @@ function mapGenreBucket(genre) {
 function buildSummary(score, buckets, genres, mainstream, concentration) {
   const mainBucket = buckets[0]?.name || "mixed music";
   const detail = genres[0]?.name || "genre exploration";
-  const stance = concentration >= 70 ? "특정 아티스트를 깊게 듣는 편이고" : "여러 아티스트를 폭넓게 탐색하는 편이며";
-  return `${mainBucket}을 중심으로 ${detail} 취향이 두드러져. ${stance} 현재 분석 점수는 ${score}점이야. 이 점수는 음악 실력이 아니라 장르 다양성, 감상 깊이, 새로운 음악 탐색 성향을 바탕으로 계산해.`;
+  const stance = concentration >= 70 ? "여러 아티스트를 폭넓게 찾아 듣는 편이에요." : "좋아하는 아티스트를 깊게 파고드는 편이에요.";
+  return `${mainBucket} 채널이 가장 크고, 세부적으로는 ${detail} 취향이 두드러져요. ${stance} 점수 ${score}점은 음악 실력이 아니라 장르 다양성, 감상 깊이, 새 음악을 찾는 성향을 합친 값이에요.`;
 }
 
 function buildCriticMatches(genres, buckets) {

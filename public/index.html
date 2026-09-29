@@ -4,35 +4,38 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Music Ability</title>
+    <link rel="stylesheet" href="/fonts/pretendard/pretendard.css">
     <link rel="stylesheet" href="/css/styles.css">
     <script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"></script>
   </head>
-  <body>
-    <main class="shell hero">
-      <section class="hero-copy">
-        <p class="eyebrow">Music Taste Profile</p>
-        <h1>음악력은 취향의 넓이와 깊이를 같이 보는 지도.</h1>
-        <p class="lead">연결한 음악 서비스의 청취 데이터를 바탕으로 장르의 폭, 감상 깊이, 새로운 음악을 발견하는 성향을 분석해 보여줍니다.</p>
+  <body class="console-page">
+    <header class="console-top">
+      <span class="brand">Music Ability</span>
+    </header>
+
+    <main class="landing">
+      <section class="landing-copy">
+        <h1>내 취향은 어떤 비율로 섞여 있을까</h1>
+        <p class="lead">음악 서비스의 청취 기록으로 장르 비중, 감상 깊이, 새 음악을 찾아 듣는 성향을 분석해요. 결과는 한 대의 믹싱 콘솔처럼 보여 드려요.</p>
         <div class="actions">
-          <a class="button primary" href="/login">Spotify로 시작</a>
-          <button class="button apple-button" id="apple-login" type="button">Apple Music으로 시작</button>
-          <button class="button secondary" id="youtube-login" type="button" title="공식 청취 기록 API 준비 중">YouTube Music 준비 중</button>
-          <a class="button secondary" href="/dashboard.html?demo=1">데모 보기</a>
+          <a class="plate-button primary" href="/login">Spotify로 분석하기</a>
+          <button class="plate-button" id="apple-login" type="button">Apple Music으로 분석하기</button>
+          <a class="plate-button quiet" href="/dashboard.html?demo=1">예시 결과 보기</a>
         </div>
-        <p class="notice" id="provider-notice" hidden></p>
-        <p class="privacy">음악력 점수는 음악 실력의 순위가 아니라 개인의 음악 탐색 성향을 보여주는 지표입니다.</p>
+        <button class="text-button" id="youtube-login" type="button">YouTube Music은 언제 되나요?</button>
+        <p class="notice" id="provider-notice" role="status" hidden></p>
+        <p class="privacy">점수는 음악 실력의 순위가 아니에요. 어떤 음악을 얼마나 넓고 깊게 듣는지 보여 주는 지표예요.</p>
       </section>
-      <section class="signal-board" aria-label="preview">
-        <div class="score-orbit">
-          <span>84</span>
-          <small>music ability</small>
+
+      <section class="landing-mixer" aria-label="분석 결과 예시">
+        <div class="mixer preview" id="preview-mixer">
+          <div class="strip" style="--level: 86; --cap: var(--cap-blue)"><span class="strip-name">K-pop</span><div class="fader"><span class="fader-cap"></span></div><span class="strip-value">36%</span></div>
+          <div class="strip" style="--level: 55; --cap: var(--cap-yellow)"><span class="strip-name">J-pop</span><div class="fader"><span class="fader-cap"></span></div><span class="strip-value">22%</span></div>
+          <div class="strip" style="--level: 45; --cap: var(--cap-green)"><span class="strip-name">인디</span><div class="fader"><span class="fader-cap"></span></div><span class="strip-value">18%</span></div>
+          <div class="strip" style="--level: 30; --cap: var(--cap-red)"><span class="strip-name">힙합</span><div class="fader"><span class="fader-cap"></span></div><span class="strip-value">12%</span></div>
+          <div class="strip" style="--level: 20; --cap: var(--cap-white)"><span class="strip-name">R&amp;B</span><div class="fader"><span class="fader-cap"></span></div><span class="strip-value">8%</span></div>
         </div>
-        <div class="preview-list">
-          <div><strong>K-pop / Korean</strong><span>36%</span></div>
-          <div><strong>J-pop / Japanese</strong><span>22%</span></div>
-          <div><strong>Indie / Alternative</strong><span>18%</span></div>
-          <div><strong>Hip-hop / Rap</strong><span>12%</span></div>
-        </div>
+        <p class="mixer-caption">예시: 장르마다 한 채널, 많이 들을수록 페이더가 올라가요.</p>
       </section>
     </main>
     <script type="module" src="/js/home.js"></script>

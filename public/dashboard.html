@@ -3,80 +3,106 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Music Ability Dashboard</title>
+    <title>내 취향 믹스 - Music Ability</title>
+    <link rel="stylesheet" href="/fonts/pretendard/pretendard.css">
     <link rel="stylesheet" href="/css/styles.css">
   </head>
-  <body>
-    <main class="shell dashboard">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Music Ability</p>
-          <h1>내 음악 취향 분석</h1>
+  <body class="console-page">
+    <header class="console-top">
+      <a class="brand" href="/">Music Ability</a>
+      <a class="plate-button" href="/">다른 계정으로 분석</a>
+    </header>
+
+    <main class="console">
+      <section class="master" aria-labelledby="master-title">
+        <div class="vu" aria-hidden="true">
+          <svg viewBox="0 0 240 140" class="vu-face">
+            <g id="vu-scale"></g>
+            <line id="vu-needle" class="vu-needle" x1="120" y1="128" x2="120" y2="30"></line>
+            <circle class="vu-pivot" cx="120" cy="128" r="7"></circle>
+          </svg>
         </div>
-        <a class="button secondary" href="/">처음으로</a>
-      </header>
+        <div class="master-readout">
+          <h1 id="master-title">내 취향 믹스</h1>
+          <p class="master-score"><strong id="score">--</strong><span>/ 100</span></p>
+          <p class="master-label" id="listener-label">분석 중</p>
+          <p class="master-summary" id="summary">청취 기록을 불러오고 있어요.</p>
+        </div>
+      </section>
 
-      <section class="result-grid">
-        <article class="panel score-panel">
-          <span class="label">음악력 점수</span>
-          <strong id="score">--</strong>
-          <p id="summary">분석을 준비하는 중입니다.</p>
-        </article>
+      <section class="section" aria-labelledby="channels-title">
+        <div class="section-head">
+          <h2 id="channels-title">장르 채널</h2>
+          <p>많이 들은 장르일수록 페이더가 높아요.</p>
+        </div>
+        <div class="mixer" id="buckets"></div>
+      </section>
 
-        <article class="panel metrics-panel">
-          <span class="label">취향 지표</span>
-          <div id="metrics" class="metrics"></div>
-        </article>
+      <section class="section" aria-labelledby="knobs-title">
+        <div class="section-head">
+          <h2 id="knobs-title">취향 지표</h2>
+          <p>각 지표는 0에서 100 사이예요. 높다고 더 좋은 건 아니에요.</p>
+        </div>
+        <div class="knobs" id="metrics"></div>
+      </section>
 
-        <article class="panel wide">
-          <span class="label">장르 스펙트럼</span>
-          <div id="buckets" class="bars"></div>
-        </article>
+      <section class="section" aria-labelledby="genres-title">
+        <div class="section-head">
+          <h2 id="genres-title">세부 장르</h2>
+          <p>아티스트에게 붙은 장르 태그를 비중 순으로 모았어요.</p>
+        </div>
+        <div class="scribble" id="genres"></div>
+      </section>
 
-        <article class="panel wide">
-          <span class="label">세부 장르</span>
-          <div id="genres" class="chips"></div>
-        </article>
-
-        <article class="panel">
-          <span class="label">상위 트랙</span>
-          <div id="tracks" class="rank-list"></div>
-        </article>
-
-        <article class="panel">
-          <span class="label">취향이 겹치는 큐레이터</span>
-          <div id="critics" class="rank-list"></div>
-        </article>
-
-        <article class="panel wide feedback-panel">
-          <span class="label">분석 품질 개선</span>
-          <p>분석 결과와 평가를 익명화해 음악력 계산을 개선하는 데 사용할 수 있어. 참여 여부는 언제든 바꿀 수 있어.</p>
-          <div class="feedback-actions">
-            <button class="button primary" id="consent-button" type="button">품질 개선에 참여</button>
-            <form id="feedback-form" class="feedback-form">
-              <label for="rating">이번 분석은 얼마나 잘 맞나요?</label>
-              <select id="rating" name="rating">
-                <option value="5">5점 · 매우 잘 맞음</option>
-                <option value="4">4점 · 잘 맞음</option>
-                <option value="3">3점 · 보통</option>
-                <option value="2">2점 · 조금 다름</option>
-                <option value="1">1점 · 전혀 다름</option>
-              </select>
-              <button class="button secondary" type="submit">평가 보내기</button>
-            </form>
+      <div class="split">
+        <section class="section" aria-labelledby="tracks-title">
+          <div class="section-head">
+            <h2 id="tracks-title">자주 들은 트랙</h2>
           </div>
-          <small id="feedback-status" class="feedback-status" role="status"></small>
-        </article>
+          <ol class="cue-list" id="tracks"></ol>
+        </section>
 
-        <article class="panel wide media-panel">
-          <span class="label">음악 정보 피드</span>
-          <div class="media-search">
-            <label class="sr-only" for="media-query">정보 검색</label>
-            <input id="media-query" type="search" value="new music" placeholder="아티스트나 곡 검색">
-            <button class="button secondary" id="media-search-button" type="button">검색</button>
+        <section class="section" aria-labelledby="critics-title">
+          <div class="section-head">
+            <h2 id="critics-title">취향이 비슷한 큐레이터</h2>
           </div>
-          <div id="media-items" class="media-list"></div>
-        </article>
+          <ul class="match-list" id="critics"></ul>
+        </section>
+      </div>
+
+      <section class="section" aria-labelledby="media-title">
+        <div class="section-head">
+          <h2 id="media-title">음악 소식</h2>
+          <p>공식 채널과 기사 원문으로 연결돼요.</p>
+        </div>
+        <form class="media-search" id="media-form">
+          <label class="sr-only" for="media-query">아티스트나 곡 이름</label>
+          <input id="media-query" type="search" value="new music" placeholder="아티스트나 곡 이름">
+          <button class="plate-button" id="media-search-button" type="submit">소식 찾기</button>
+        </form>
+        <div id="media-items" class="media-list"></div>
+      </section>
+
+      <section class="section feedback" aria-labelledby="feedback-title">
+        <div class="section-head">
+          <h2 id="feedback-title">분석 개선에 참여하기</h2>
+          <p>참여하면 점수와 장르 비중만 익명으로 저장해요. 이메일, 이름, 청취 목록은 저장하지 않아요.</p>
+        </div>
+        <div class="feedback-actions">
+          <button class="plate-button primary" id="consent-button" type="button">참여하기</button>
+          <form id="feedback-form" class="feedback-form">
+            <label for="rating">이번 분석이 내 취향과 얼마나 맞나요?</label>
+            <select id="rating" name="rating">
+              <option value="5">5점, 매우 잘 맞아요</option>
+              <option value="4">4점, 잘 맞아요</option>
+              <option value="3">3점, 보통이에요</option>
+              <option value="2">2점, 조금 달라요</option>
+              <option value="1">1점, 전혀 달라요</option>
+            </select>
+            <button class="plate-button" type="submit">평가 보내기</button>
+          </form>
+        </div>
+        <p id="feedback-status" class="feedback-status" role="status"></p>
       </section>
     </main>
     <script type="module" src="/js/app.js"></script>
