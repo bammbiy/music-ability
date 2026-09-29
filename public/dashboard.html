@@ -26,6 +26,7 @@
           <h1 id="master-title">내 취향 믹스</h1>
           <p class="master-score"><strong id="score">--</strong><span>/ 100</span></p>
           <p class="master-label" id="listener-label">분석 중</p>
+          <p class="master-rank" id="percentile" hidden></p>
           <p class="master-summary" id="summary">청취 기록을 불러오고 있어요.</p>
         </div>
       </section>
@@ -41,9 +42,17 @@
       <section class="section" aria-labelledby="knobs-title">
         <div class="section-head">
           <h2 id="knobs-title">취향 지표</h2>
-          <p>각 지표는 0에서 100 사이예요. 높다고 더 좋은 건 아니에요.</p>
+          <p>각 지표는 0에서 100 사이예요. 노브 아래에 점수에 얼마나 반영됐는지 적었어요.</p>
         </div>
         <div class="knobs" id="metrics"></div>
+      </section>
+
+      <section class="section" aria-labelledby="acclaim-title">
+        <div class="section-head">
+          <h2 id="acclaim-title">평단과 청취자 평가</h2>
+          <p id="acclaim-note">자주 듣는 앨범의 평론 점수를 Wikidata, MusicBrainz 같은 공개 데이터에서 모아요.</p>
+        </div>
+        <ol class="album-list" id="acclaim-albums"></ol>
       </section>
 
       <section class="section" aria-labelledby="genres-title">

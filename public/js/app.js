@@ -10,8 +10,15 @@ const metricInfo = {
   detailDepth: { name: "감상 깊이", help: "세부 장르와 여러 앨범을 들을수록 높아요." },
   discovery: { name: "발견 성향", help: "덜 알려진 아티스트를 많이 들을수록 높아요." },
   concentration: { name: "취향 확장성", help: "한 아티스트에 몰리지 않을수록 높아요." },
+  newReleaseSense: { name: "신보 감도", help: "최근 6개월 안에 나온 음악을 들을수록 높아요." },
+  criticTaste: { name: "평단 감각", help: "평론가가 높게 평가한 앨범을 들을수록 높아요." },
+  hiddenGems: { name: "숨은 명반 발굴", help: "평단 평가는 높은데 덜 알려진 앨범을 들을수록 높아요." },
   mainstream: { name: "대중성", help: "인기 있는 곡을 많이 들을수록 높아요." }
 };
+
+const POLL_INTERVAL_MS = 5000;
+const POLL_LIMIT = 60;
+let pollCount = 0;
 
 const capColors = ["blue", "yellow", "green", "red", "white", "purple", "orange", "grey"];
 
@@ -32,7 +39,7 @@ async function loadAnalysis() {
       : await fetch(`/api/analysis${demo ? "?demo=1" : ""}`);
     if (provider === "apple") sessionStorage.removeItem("appleMusicUserToken");
     if (!response.ok) throw new Error("analysis request failed");
-    render(await response.json());
+    render(await response.json(), { initial: true });
   } catch (error) {
     document.querySelector("#listener-label").textContent = "불러오지 못함";
     document.querySelector("#summary").textContent = "청취 기록을 불러오지 못했어요. 처음 화면에서 다시 로그인하거나 예시 결과를 열어 보세요.";
@@ -40,7 +47,18 @@ async function loadAnalysis() {
   }
 }
 
-function render(data) {
+async function pollAnalysis() {
+  pollCount += 1;
+  try {
+    const response = await fetch("/api/analysis?cached=1");
+    if (!response.ok) return;
+    render(await response.json(), { initial: false });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function render(data, { initial }) {
   document.querySelector("#score").textContent = String(clampPercent(data.score));
   document.querySelector("#listener-label").textContent = data.metrics?.label || "";
   document.querySelector("#summary").textContent = data.summary || "";
@@ -51,8 +69,13 @@ function render(data) {
     valueArc.style.strokeDasharray = `${(length * clampPercent(data.score)) / 100} ${length + 10}`;
   }
 
-  renderChannels(data.buckets || []);
-  renderKnobs(data.metrics || {});
+  renderPercentile(data.percentile);
+  if (initial) renderChannels(data.buckets || []);
+  renderKnobs(data.metrics || {}, data.weights || {}, data.acclaim);
+  renderAcclaim(data.acclaim, data.source === "demo");
+
+  const settling = ["collecting", "updating"].includes(data.acclaim?.status);
+  if (settling && !demo && pollCount < POLL_LIMIT) setTimeout(pollAnalysis, POLL_INTERVAL_MS);
   renderTags(data.genres || []);
   renderTracks(data.topTracks || []);
   renderCritics(data.criticMatches || []);
@@ -105,18 +128,80 @@ function renderChannels(buckets) {
   requestAnimationFrame(() => requestAnimationFrame(() => mixer.classList.remove("is-off")));
 }
 
-function renderKnobs(metrics) {
+function renderPercentile(percentile) {
+  const element = document.querySelector("#percentile");
+  if (!Number.isFinite(percentile)) {
+    element.hidden = true;
+    return;
+  }
+  element.hidden = false;
+  element.textContent = `분석한 사람 중 상위 ${Math.max(1, 100 - clampPercent(percentile))}%`;
+}
+
+function renderKnobs(metrics, weights, acclaim) {
+  const waiting = {
+    collecting: "평론 점수를 모으는 중이에요.",
+    unreachable: "평론 데이터에 연결하지 못했어요.",
+    unavailable: "평론 점수 수집이 꺼져 있어요."
+  }[acclaim?.status] || "평론 점수가 있는 앨범이 부족해요.";
   document.querySelector("#metrics").innerHTML = Object.entries(metricInfo)
-    .filter(([key]) => Number.isFinite(metrics[key]))
+    .filter(([key]) => key in metrics)
     .map(([key, info]) => {
-      const value = clampPercent(metrics[key]);
+      const ready = Number.isFinite(metrics[key]);
+      const value = ready ? clampPercent(metrics[key]) : 0;
+      const weight = weights[key];
+      const weightText = key === "mainstream" ? "점수에 반영 안 함" : Number.isFinite(weight) ? `점수에 ${weight}% 반영` : "아직 반영 안 함";
       return `
-        <div class="knob-cell">
-          <div class="knob" style="--v: ${value}" role="img" aria-label="${escapeHtml(info.name)} ${value}"></div>
-          <span class="knob-value">${value}</span>
+        <div class="knob-cell${ready ? "" : " is-empty"}">
+          <div class="knob" style="--v: ${value}" role="img" aria-label="${escapeHtml(info.name)} ${ready ? value : "데이터 없음"}"></div>
+          <span class="knob-value">${ready ? value : "–"}</span>
           <span class="knob-name">${escapeHtml(info.name)}</span>
-          <span class="knob-help">${escapeHtml(info.help)}</span>
+          <span class="knob-help">${escapeHtml(ready ? info.help : waiting)}</span>
+          <span class="knob-weight">${escapeHtml(weightText)}</span>
         </div>
+      `;
+    })
+    .join("");
+}
+
+function renderAcclaim(acclaim, isSample) {
+  const note = document.querySelector("#acclaim-note");
+  const list = document.querySelector("#acclaim-albums");
+  if (!acclaim) return;
+
+  const found = `자주 듣는 앨범 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장의 평가를 찾았어요.`;
+  const notes = {
+    ready: found,
+    updating: `${found} 나머지 ${acclaim.pending}장은 모으는 중이고, 화면은 자동으로 갱신돼요.`,
+    collecting: `앨범 ${acclaim.pending}장의 평론 점수를 모으고 있어요. 공개 API마다 요청 간격 제한이 있어서 앨범 하나에 몇 초씩 걸려요. 화면은 자동으로 갱신돼요.`,
+    unreachable: "평론 데이터 사이트(MusicBrainz, Wikidata)에 연결하지 못해서 평단 지표는 점수에서 뺐어요. 한 시간 뒤에 다시 시도해요.",
+    insufficient: `평론 점수가 있는 앨범이 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장뿐이라, 평단 지표는 점수에서 뺐어요.`,
+    unavailable: "평론 점수 수집이 꺼져 있어요. 서버 설정에서 ACCLAIM_ENABLED를 확인해 주세요."
+  };
+  note.textContent = isSample
+    ? "예시 데이터예요. 실제 평론지의 점수가 아니라 화면 구성을 보여 주기 위한 값이에요."
+    : notes[acclaim.status] || "";
+
+  list.innerHTML = (acclaim.albums || [])
+    .map((album) => {
+      const critics = (album.critics || [])
+        .slice(0, 4)
+        .map((review) => `${escapeHtml(review.label)} ${escapeHtml(review.raw)}`)
+        .join(", ");
+      const facts = [
+        Number.isFinite(album.audienceScore) ? `청취자 평점 ${Math.round(album.audienceScore)}` : "",
+        Number.isFinite(album.popularity) ? `대중성 ${clampPercent(album.popularity)}` : "",
+        album.releaseDate ? `${escapeHtml(String(album.releaseDate).slice(0, 4))}년` : ""
+      ].filter(Boolean).join(", ");
+      return `
+        <li>
+          <span class="album-score" aria-label="평단 점수 ${Math.round(album.criticScore)}">${Math.round(album.criticScore)}</span>
+          <div>
+            <strong>${escapeHtml(album.album)}${album.gem ? ' <em class="gem">숨은 명반</em>' : ""}</strong>
+            <small>${escapeHtml(album.artist)}${facts ? `, ${facts}` : ""}</small>
+            ${critics ? `<small class="album-critics">${critics}</small>` : ""}
+          </div>
+        </li>
       `;
     })
     .join("");

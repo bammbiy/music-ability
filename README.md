@@ -77,6 +77,24 @@ Google OAuth와 YouTube Data API는 유튜브 계정, 채널, 영상, 플레이�
 
 서버 엔드포인트는 `GET /api/media?q=artist%20name`입니다. YouTube 검색은 공식 `search.list` 엔드포인트와 Google 할당량 정책을 따릅니다. [YouTube Search: list](https://developers.google.com/youtube/v3/docs/search/list)
 
+## Critic & Listener Acclaim
+
+자주 듣는 앨범마다 평단과 청취자 평가를 모아 음악력 지표에 반영합니다. **공식 API나 공개 데이터만 사용하고, 이용약관에서 자동 수집을 금지하는 사이트(RateYourMusic, Metacritic, AOTY 등)는 스크래핑하지 않습니다.** Metacritic, AllMusic, Pitchfork 같은 매체의 점수는 Wikidata에 공개된 리뷰 점수(P444)로만 가져옵니다.
+
+| 출처 | 가져오는 값 | 설정 |
+| --- | --- | --- |
+| MusicBrainz | 앨범 식별(MBID), 발매일, 커뮤니티 평점 | 기본 사용, `ACCLAIM_CONTACT` 권장 |
+| Wikidata | 매체별 평론 점수 | 기본 사용 |
+| Discogs | 커뮤니티 평점, 소장/위시리스트 수 | `DISCOGS_TOKEN` |
+| Last.fm | 청취자 수, 재생 수 | `LASTFM_API_KEY` |
+
+- 새 지표: **평단 감각**(자주 듣는 앨범의 평균 평론 점수), **숨은 명반 발굴**(평론 점수 78 이상이면서 대중성 45 미만인 앨범 비중), **신보 감도**(최근 6개월 안에 나온 음악 비중).
+- 수집은 서버 백그라운드 대기열에서 API별 요청 간격(MusicBrainz 초당 1회 등)을 지키며 진행합니다. 결과는 `album_scores` 테이블에 캐시되어 찾은 앨범은 30일, 없는 앨범은 7일, 연결 실패는 1시간 동안 다시 요청하지 않습니다.
+- 평론 점수가 있는 앨범이 청취 비중의 30% 미만이거나 3장 미만이면 평단 지표는 점수에서 빠지고, 나머지 지표의 가중치가 다시 계산됩니다.
+- **보정(학습)**: 캐시된 앨범이 쌓이면 매체마다 점수를 주는 경향(평균과 분포)을 학습해 같은 기준으로 맞춥니다. 동의한 사용자의 결과가 30명 이상 쌓이면 "상위 몇 %"도 함께 보여 줍니다.
+- 상태 확인: `GET /api/acclaim/status`
+- 데모 모드의 평론 점수는 화면 구성을 보여 주기 위한 예시 값이며 실제 매체 점수가 아닙니다.
+
 ## Data Scope
 
 Spotify Public Web API는 전체 청취 시간 기록을 직접 제공하지 않습니다. 현재 버전은 Top 트랙, Top 아티스트, 최근 재생 이력과 아티스트 장르 태그를 조합해 분석합니다. 정확한 장기 청취 시간은 사용자가 연결한 뒤 재생 이벤트를 자체 데이터베이스에 누적하는 방식으로 확장할 예정입니다.
@@ -104,6 +122,8 @@ Spotify Public Web API는 전체 청취 시간 기록을 직접 제공하지 않
 - Spotify Web API + OAuth 2.0 Authorization Code flow
 - Apple MusicKit on the Web + Apple Music API
 - Vanilla HTML, CSS, JavaScript
+- MusicBrainz, Wikidata, Discogs, Last.fm (평단/청취자 평가)
+- 테스트: `npm test` (Node 내장 test runner)
 
 ## Quality Data
 

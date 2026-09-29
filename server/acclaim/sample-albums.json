@@ -1,0 +1,49 @@
+[
+  {
+    "artist": "NewJeans",
+    "album": "OMG",
+    "releaseDate": "2023-01-02",
+    "critics": [
+      { "source": "sample critic a", "label": "예시 평론 A", "raw": "8/10", "score": 80 }
+    ],
+    "musicbrainz": { "rating": 84, "votes": 40 },
+    "lastfm": { "listeners": 900000, "playcount": 30000000 },
+    "sources": ["sample"]
+  },
+  {
+    "artist": "Fujii Kaze",
+    "album": "LOVE ALL SERVE ALL",
+    "releaseDate": "2022-03-23",
+    "critics": [
+      { "source": "sample critic a", "label": "예시 평론 A", "raw": "8.4/10", "score": 84 },
+      { "source": "sample critic b", "label": "예시 평론 B", "raw": "4/5", "score": 80 }
+    ],
+    "musicbrainz": { "rating": 88, "votes": 12 },
+    "lastfm": { "listeners": 30000, "playcount": 1500000 },
+    "sources": ["sample"]
+  },
+  {
+    "artist": "PinkPantheress",
+    "album": "to hell with it",
+    "releaseDate": "2021-10-15",
+    "critics": [
+      { "source": "sample critic a", "label": "예시 평론 A", "raw": "7.8/10", "score": 78 },
+      { "source": "sample critic b", "label": "예시 평론 B", "raw": "4/5", "score": 80 }
+    ],
+    "musicbrainz": { "rating": 76, "votes": 25 },
+    "lastfm": { "listeners": 700000, "playcount": 25000000 },
+    "sources": ["sample"]
+  },
+  {
+    "artist": "Kendrick Lamar",
+    "album": "Mr. Morale & the Big Steppers",
+    "releaseDate": "2022-05-13",
+    "critics": [
+      { "source": "sample critic a", "label": "예시 평론 A", "raw": "85/100", "score": 85 },
+      { "source": "sample critic b", "label": "예시 평론 B", "raw": "4.5/5", "score": 90 }
+    ],
+    "musicbrainz": { "rating": 86, "votes": 150 },
+    "lastfm": { "listeners": 2000000, "playcount": 120000000 },
+    "sources": ["sample"]
+  }
+]

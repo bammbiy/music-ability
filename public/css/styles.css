@@ -478,7 +478,7 @@ a {
 
 .knobs {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 20px 12px;
 }
 
@@ -538,6 +538,84 @@ a {
   color: var(--ink-soft);
   font-size: var(--step--1);
   line-height: 1.45;
+}
+
+.knob-weight {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.knob-cell.is-empty .knob,
+.knob-cell.is-empty .knob-value {
+  opacity: 0.35;
+}
+
+.master-rank {
+  margin-top: 10px;
+  color: #fff;
+  font-weight: 700;
+}
+
+/* Album acclaim */
+
+.album-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.album-list li {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--plate);
+}
+
+.album-list li:last-child {
+  border-bottom: 0;
+}
+
+.album-score {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--well);
+  color: #fff;
+  font-size: var(--step-2);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.album-list strong {
+  display: block;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.album-list small {
+  display: block;
+  color: var(--ink-soft);
+  font-size: var(--step--1);
+}
+
+.gem {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--signal);
+  color: #fff;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 700;
+  vertical-align: 2px;
 }
 
 /* Scribble strip tags */
@@ -731,6 +809,10 @@ a {
   .master,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .knobs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .landing {

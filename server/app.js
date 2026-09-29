@@ -4,7 +4,10 @@ import { readFile } from "node:fs/promises";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteUserData, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
+import { deleteUserData, getAlbumCacheStats, getLatestScores, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
+import { buildAnalysis } from "./analysis.js";
+import { createAcclaimService } from "./acclaim/index.js";
+import { demoDataset } from "./demo.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
@@ -28,6 +31,17 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_SESSION_TTL_MS = 15 * 60 * 1000;
 const EXTERNAL_FETCH_TIMEOUT_MS = 8000;
 const MEDIA_CACHE_TTL_MS = 5 * 60 * 1000;
+const DATASET_REUSE_MS = 15 * 60 * 1000;
+const POPULATION_TTL_MS = 10 * 60 * 1000;
+
+const acclaim = createAcclaimService({
+  enabled: process.env.ACCLAIM_ENABLED !== "0",
+  contact: process.env.ACCLAIM_CONTACT || "",
+  discogsToken: process.env.DISCOGS_TOKEN || "",
+  lastfmKey: process.env.LASTFM_API_KEY || "",
+  sampleFile: join(__dirname, "acclaim", "sample-albums.json")
+});
+let populationCache = { scores: [], expiresAt: 0 };
 
 const sessions = new Map();
 const rateLimits = new Map();
@@ -119,6 +133,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/analysis") {
       return handleAnalysis(req, res, url);
+    }
+
+    if (url.pathname === "/api/acclaim/status") {
+      return sendJson(res, { ...acclaim.status(), cache: getAlbumCacheStats(), calibration: acclaim.calibration() });
     }
 
     if (url.pathname === "/api/apple/analysis" && req.method === "POST") {
@@ -254,8 +272,18 @@ async function handleAnalysis(req, res, url) {
   const demo = url.searchParams.get("demo") === "1";
   const session = getSession(req);
 
-  if (demo || !session?.accessToken) {
-    return sendJson(res, buildAnalysis(demoDataset));
+  if (demo || (!session?.accessToken && !session?.lastDataset)) {
+    return sendJson(res, analyze(demoDataset, { sample: true }));
+  }
+
+  // Follow-up polls while album scores are collected reuse the dataset from
+  // the first request instead of calling the provider API again.
+  if (url.searchParams.get("cached") === "1" && session.lastDataset && session.lastDatasetAt > Date.now() - DATASET_REUSE_MS) {
+    return sendJson(res, analyzeForSession(session, session.lastDataset));
+  }
+
+  if (!session.accessToken) {
+    throw new HttpError(401, "spotify_reauth_required");
   }
 
   const [topArtists, topTracks, recentTracks] = await Promise.all([
@@ -289,11 +317,40 @@ async function handleAnalysis(req, res, url) {
     recentTracks: (recentTracks.items || []).map((item) => normalizeTrack(item.track, artistById))
   };
 
-  const analysis = buildAnalysis(dataset);
-  if (session.analysisConsent && session.userId) {
+  rememberDataset(session, dataset);
+  return sendJson(res, analyzeForSession(session, dataset));
+}
+
+function analyze(dataset, { sample = false } = {}) {
+  const albums = (dataset.tracks || []).map((track) => ({ artist: track.artists?.[0]?.name, album: track.album }));
+  return buildAnalysis(dataset, {
+    acclaim: acclaim.lookup(albums, { sample }),
+    population: sample ? [] : populationScores()
+  });
+}
+
+function analyzeForSession(session, dataset) {
+  const analysis = analyze(dataset);
+  const settled = !["collecting", "updating"].includes(analysis.acclaim.status);
+  // Store one snapshot per dataset, once album scores have settled.
+  if (settled && !session.lastDatasetSaved && session.analysisConsent && session.userId) {
     saveAnalysisSnapshot({ userId: session.userId, provider: dataset.provider, analysis });
+    session.lastDatasetSaved = true;
   }
-  return sendJson(res, analysis);
+  return analysis;
+}
+
+function rememberDataset(session, dataset) {
+  session.lastDataset = dataset;
+  session.lastDatasetAt = Date.now();
+  session.lastDatasetSaved = false;
+}
+
+function populationScores() {
+  if (populationCache.expiresAt < Date.now()) {
+    populationCache = { scores: getLatestScores(), expiresAt: Date.now() + POPULATION_TTL_MS };
+  }
+  return populationCache.scores;
 }
 
 async function handleAppleAnalysis(req, res) {
@@ -322,7 +379,6 @@ async function handleAppleAnalysis(req, res) {
 
   const appleData = await response.json();
   const dataset = normalizeAppleDataset(appleData);
-  const analysis = buildAnalysis(dataset);
   const session = getOrCreateSession(req, res);
   const sessionData = sessions.get(session);
   const appleUserId = hashProviderAccount("apple", musicUserToken);
@@ -333,11 +389,8 @@ async function handleAppleAnalysis(req, res) {
   }
   sessionData.provider = "apple";
 
-  if (sessionData.analysisConsent && sessionData.userId) {
-    saveAnalysisSnapshot({ userId: sessionData.userId, provider: dataset.provider, analysis });
-  }
-
-  return sendJson(res, analysis);
+  rememberDataset(sessionData, dataset);
+  return sendJson(res, analyzeForSession(sessionData, dataset));
 }
 
 async function handleMedia(req, res, url) {
@@ -609,170 +662,6 @@ function normalizeTrack(track, artistById) {
   };
 }
 
-function buildAnalysis(dataset) {
-  const genreWeights = new Map();
-  const bucketWeights = new Map();
-  const artistWeights = new Map();
-  const tracks = dataset.tracks || [];
-  const artists = dataset.artists || [];
-
-  tracks.forEach((track, index) => {
-    const weight = tracks.length - index;
-    for (const artist of track.artists || []) {
-      artistWeights.set(artist.name, (artistWeights.get(artist.name) || 0) + weight);
-      for (const genre of artist.genres || []) {
-        genreWeights.set(genre, (genreWeights.get(genre) || 0) + weight);
-        const bucket = mapGenreBucket(genre);
-        bucketWeights.set(bucket, (bucketWeights.get(bucket) || 0) + weight);
-      }
-    }
-  });
-
-  if (genreWeights.size === 0) {
-    for (const artist of artists) {
-      for (const genre of artist.genres || []) {
-        genreWeights.set(genre, (genreWeights.get(genre) || 0) + 1);
-        const bucket = mapGenreBucket(genre);
-        bucketWeights.set(bucket, (bucketWeights.get(bucket) || 0) + 1);
-      }
-    }
-  }
-
-  const genres = rankMap(genreWeights);
-  const buckets = rankMap(bucketWeights);
-  const topArtists = rankMap(artistWeights).slice(0, 8);
-  const avgPopularity = average(tracks.map((track) => track.popularity).filter(Number.isFinite));
-  const mainstream = Math.round(avgPopularity || average(artists.map((artist) => artist.popularity).filter(Number.isFinite)) || 50);
-  const diversity = diversityScore(bucketWeights, genreWeights);
-  const detailDepth = depthScore(tracks, genres);
-  const discovery = discoveryScore(tracks, artists, mainstream);
-  const concentration = concentrationScore(artistWeights);
-  const score = Math.round(diversity * 0.3 + detailDepth * 0.25 + discovery * 0.25 + concentration * 0.2);
-
-  return {
-    source: dataset.source,
-    generatedAt: dataset.generatedAt,
-    score,
-    metrics: {
-      diversity,
-      detailDepth,
-      discovery,
-      concentration,
-      mainstream,
-      label: scoreLabel(score)
-    },
-    buckets: withPercent(buckets).slice(0, 8),
-    genres: withPercent(genres).slice(0, 12),
-    topArtists,
-    topTracks: tracks.slice(0, 8).map((track) => ({
-      name: track.name,
-      artist: track.artists?.map((artist) => artist.name).join(", ") || "",
-      image: track.image,
-      popularity: track.popularity
-    })),
-    summary: buildSummary(score, buckets, genres, mainstream, concentration),
-    criticMatches: buildCriticMatches(genres, buckets)
-  };
-}
-
-function diversityScore(bucketWeights, genreWeights) {
-  const bucketEntropy = normalizedEntropy([...bucketWeights.values()]);
-  const genreEntropy = normalizedEntropy([...genreWeights.values()]);
-  return Math.round(bucketEntropy * 0.55 + genreEntropy * 0.45);
-}
-
-function depthScore(tracks, genres) {
-  const detailedGenres = genres.filter((genre) => genre.name.includes(" ") || genre.name.includes("-")).length;
-  const albums = new Set(tracks.map((track) => track.album).filter(Boolean)).size;
-  return Math.round(Math.min(100, detailedGenres * 10) * 0.6 + Math.min(100, albums * 8) * 0.4);
-}
-
-function discoveryScore(tracks, artists, mainstream) {
-  const uniqueArtists = new Set(tracks.flatMap((track) => (track.artists || []).map((artist) => artist.name))).size;
-  const artistPart = Math.min(100, uniqueArtists * 12);
-  return Math.max(0, Math.min(100, Math.round(artistPart * 0.55 + (100 - mainstream) * 0.45)));
-}
-
-function concentrationScore(artistWeights) {
-  const values = [...artistWeights.values()];
-  if (values.length < 2) return values.length === 1 ? 25 : 50;
-  const total = values.reduce((sum, value) => sum + value, 0) || 1;
-  const topShare = Math.max(...values) / total;
-  return Math.round(Math.max(0, Math.min(100, 100 - topShare * 100)));
-}
-
-function normalizedEntropy(values) {
-  if (values.length <= 1) return values.length ? 25 : 0;
-  const total = values.reduce((sum, value) => sum + value, 0) || 1;
-  const entropy = values.reduce((sum, value) => {
-    const probability = value / total;
-    return sum - probability * Math.log2(probability);
-  }, 0);
-  return Math.round((entropy / Math.log2(values.length)) * 100);
-}
-
-function scoreLabel(score) {
-  if (score >= 80) return "탐색형 리스너";
-  if (score >= 60) return "균형형 리스너";
-  if (score >= 40) return "취향 집중형 리스너";
-  return "취향 발견 중";
-}
-
-function mapGenreBucket(genre) {
-  const value = genre.toLowerCase();
-  if (value.includes("k-pop") || value.includes("korean")) return "K-pop / Korean";
-  if (value.includes("j-pop") || value.includes("j-rock") || value.includes("japanese") || value.includes("vocaloid")) return "J-pop / Japanese";
-  if (value.includes("hip hop") || value.includes("rap") || value.includes("trap")) return "Hip-hop / Rap";
-  if (value.includes("r&b") || value.includes("soul")) return "R&B / Soul";
-  if (value.includes("rock") || value.includes("metal") || value.includes("punk")) return "Rock";
-  if (value.includes("indie") || value.includes("alternative")) return "Indie / Alternative";
-  if (value.includes("electro") || value.includes("house") || value.includes("techno") || value.includes("edm")) return "Electronic";
-  if (value.includes("pop")) return "Pop";
-  if (value.includes("jazz") || value.includes("classical") || value.includes("ambient")) return "Deep Listening";
-  return "Other";
-}
-
-function buildSummary(score, buckets, genres, mainstream, concentration) {
-  const mainBucket = buckets[0]?.name || "mixed music";
-  const detail = genres[0]?.name || "genre exploration";
-  const stance = concentration >= 70 ? "여러 아티스트를 폭넓게 찾아 듣는 편이에요." : "좋아하는 아티스트를 깊게 파고드는 편이에요.";
-  return `${mainBucket} 채널이 가장 크고, 세부적으로는 ${detail} 취향이 두드러져요. ${stance} 점수 ${score}점은 음악 실력이 아니라 장르 다양성, 감상 깊이, 새 음악을 찾는 성향을 합친 값이에요.`;
-}
-
-function buildCriticMatches(genres, buckets) {
-  const taste = new Set([...genres.slice(0, 6).map((item) => item.name.toLowerCase()), ...buckets.slice(0, 3).map((item) => item.name.toLowerCase())]);
-  const critics = [
-    { name: "Indie Curator", focus: ["indie", "alternative", "bedroom pop", "rock"], note: "인디/얼터너티브 확장 추천에 강함" },
-    { name: "K-pop Analyst", focus: ["k-pop", "korean", "pop", "r&b"], note: "아이돌 팝과 한국 R&B 흐름을 잘 잡음" },
-    { name: "Club DJ", focus: ["electronic", "house", "techno", "edm"], note: "전자음악과 댄스 플로어 계열 발견에 적합" },
-    { name: "Deep Listener", focus: ["ambient", "jazz", "classical", "deep listening"], note: "앨범 단위 감상과 사운드 질감 분석에 적합" }
-  ];
-
-  return critics
-    .map((critic) => {
-      const overlap = critic.focus.filter((keyword) => [...taste].some((item) => item.includes(keyword)));
-      return { ...critic, overlap: overlap.length, match: Math.min(100, overlap.length * 28) };
-    })
-    .sort((a, b) => b.match - a.match)
-    .slice(0, 3);
-}
-
-function rankMap(map) {
-  return [...map.entries()]
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
-}
-
-function withPercent(items) {
-  const total = items.reduce((sum, item) => sum + item.value, 0) || 1;
-  return items.map((item) => ({ ...item, percent: Math.round((item.value / total) * 100) }));
-}
-
-function average(values) {
-  if (values.length === 0) return 0;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
 function getOrCreateSession(req, res) {
   const existing = getSession(req);
   if (existing) return existing.id;
@@ -859,7 +748,7 @@ function rateLimitFor(pathname, method) {
   if (pathname === "/api/media") return { key: "media", max: 30, windowMs: 60 * 1000 };
   if (pathname === "/login" || pathname === "/callback") return { key: "auth", max: 20, windowMs: 60 * 1000 };
   if (pathname.startsWith("/api/") && method === "POST") return { key: "post", max: 30, windowMs: 60 * 1000 };
-  if (pathname === "/api/analysis") return { key: "analysis", max: 20, windowMs: 60 * 1000 };
+  if (pathname === "/api/analysis") return { key: "analysis", max: 40, windowMs: 60 * 1000 };
   return null;
 }
 
@@ -964,24 +853,3 @@ function loadEnv() {
     // Running without .env is supported through demo mode.
   }
 }
-
-const demoDataset = {
-  source: "demo",
-  provider: "demo",
-  generatedAt: new Date().toISOString(),
-  artists: [
-    { id: "newjeans", name: "NewJeans", genres: ["k-pop", "k-pop girl group"], popularity: 86 },
-    { id: "fujii", name: "Fujii Kaze", genres: ["j-pop", "japanese r&b"], popularity: 74 },
-    { id: "pinkpantheress", name: "PinkPantheress", genres: ["bedroom pop", "drum and bass", "uk pop"], popularity: 78 },
-    { id: "wave", name: "wave to earth", genres: ["korean indie", "korean city pop"], popularity: 69 },
-    { id: "kendrick", name: "Kendrick Lamar", genres: ["hip hop", "rap"], popularity: 91 }
-  ],
-  tracks: [
-    { name: "Ditto", popularity: 83, image: null, artists: [{ name: "NewJeans", genres: ["k-pop", "k-pop girl group"] }] },
-    { name: "Matsuri", popularity: 72, image: null, artists: [{ name: "Fujii Kaze", genres: ["j-pop", "japanese r&b"] }] },
-    { name: "Pain", popularity: 75, image: null, artists: [{ name: "PinkPantheress", genres: ["bedroom pop", "drum and bass", "uk pop"] }] },
-    { name: "bad", popularity: 68, image: null, artists: [{ name: "wave to earth", genres: ["korean indie", "korean city pop"] }] },
-    { name: "N95", popularity: 82, image: null, artists: [{ name: "Kendrick Lamar", genres: ["hip hop", "rap"] }] }
-  ],
-  recentTracks: []
-};
