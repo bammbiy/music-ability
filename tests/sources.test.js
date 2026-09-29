@@ -46,7 +46,18 @@ test("collects identity, critic scores and ratings from open sources", { timeout
   const mock = mockFetch([
     [/musicbrainz\.org\/ws\/2\/release-group\/\?/, musicbrainzSearch],
     [/musicbrainz\.org\/ws\/2\/release-group\/b1392450/, musicbrainzDetail],
+    [/query\.wikidata\.org.*P166/, {
+      results: {
+        bindings: [
+          { item: wd("Q202996"), links: { value: "44" }, award: wd("Q1"), awardLabel: { value: "Grammy Award for Best Alternative Music Album" }, enwiki: { value: "https://en.wikipedia.org/wiki/OK_Computer" } },
+          { item: wd("Q202996"), links: { value: "44" }, award: wd("Q2"), awardLabel: { value: "RIAA platinum certification" }, nom: wd("Q3"), nomLabel: { value: "Grammy Award for Album of the Year" } },
+          { item: wd("Q33328630"), links: { value: "3" } }
+        ]
+      }
+    }],
     [/query\.wikidata\.org/, wikidata],
+    [/en\.wikipedia\.org/, { query: { pages: [{ revisions: [{ slots: { main: { content: "{{Music ratings\n| MC = 100/100<ref>x</ref>\n| rev1 = [[AllMusic]]\n| rev1score = {{Rating|5|5}}\n| rev2 = ''[[Q (magazine)|Q]]''\n| rev2score = {{Rating|5|5}}\n}}" } } }] }] } }],
+    [/api\.listenbrainz\.org/, [{ release_group_mbid: MBID, total_listen_count: 900000, total_user_count: 15000 }]],
     [/api\.discogs\.com\/database\/search/, { results: [{ id: 21491, title: "Radiohead - OK Computer", community: { have: 90000, want: 30000 } }] }],
     [/api\.discogs\.com\/masters\/21491/, { main_release: 4950798 }],
     [/api\.discogs\.com\/releases\/4950798/, { community: { rating: { average: 4.6, count: 5000 } } }],
@@ -54,18 +65,29 @@ test("collects identity, critic scores and ratings from open sources", { timeout
   ]);
   try {
     const sources = createSources({ contact: "dev@example.com", discogsToken: "t", lastfmKey: "k" });
-    const { status, record } = await sources.collect({ key: "radiohead::ok computer", artist: "Radiohead", album: "OK Computer" });
+    const { status, partial, record } = await sources.collect({ key: "radiohead::ok computer", artist: "Radiohead", album: "OK Computer" });
 
     assert.equal(status, "ok");
+    assert.equal(partial, false);
     assert.equal(record.mbid, MBID, "picks the exact title match, not the reissue");
     assert.equal(record.releaseDate, "1997-05-21");
     assert.equal(record.musicbrainz.rating, 93);
     // Film/game outlets and unknown reviewers are dropped; Spin's bare "8.2" has no known scale.
-    assert.deepEqual(record.critics.map((review) => [review.source, review.score]), [["pitchfork", 100], ["allmusic", 100], ["robert christgau", 90], ["album of the year", 94]]);
+    assert.deepEqual(record.critics.filter((review) => !review.via).map((review) => [review.source, review.score]), [["pitchfork", 100], ["allmusic", 100], ["robert christgau", 90], ["album of the year", 94]]);
     assert.equal(record.discogs.rating, 92);
     assert.equal(record.discogs.have, 90000);
     assert.equal(record.lastfm.listeners, 3000000);
-    assert.deepEqual(record.sources, ["musicbrainz", "wikidata", "discogs", "lastfm"]);
+    assert.deepEqual(record.sources, ["musicbrainz", "wikidata", "wikipedia", "listenbrainz", "discogs", "lastfm"]);
+    assert.deepEqual(record.recognition.awards, ["Grammy Award for Best Alternative Music Album"]);
+    assert.deepEqual(record.recognition.certifications, ["RIAA platinum certification"]);
+    assert.deepEqual(record.recognition.nominations, ["Grammy Award for Album of the Year"]);
+    assert.equal(record.recognition.sitelinks, 44);
+    assert.equal(record.wikipedia.title, "OK Computer");
+    // Wikipedia adds Metacritic and Q; AllMusic is already known from Wikidata.
+    assert.ok(record.critics.some((review) => review.source === "metacritic" && review.score === 100));
+    assert.ok(record.critics.some((review) => review.source === "q" && review.via === "wikipedia"));
+    assert.equal(record.critics.filter((review) => review.source === "allmusic").length, 1);
+    assert.equal(record.listenbrainz.users, 15000);
 
     const mbCall = mock.calls.find((call) => call.url.includes("musicbrainz"));
     assert.match(mbCall.headers["User-Agent"], /MusicAbility\/0\.1 \( dev@example\.com \)/);
@@ -151,5 +173,23 @@ test("retries when MusicBrainz asks to slow down", { timeout: 20000 }, async () 
     assert.ok(calls >= 2);
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+test("a blocked optional source marks the result partial so it is retried sooner", { timeout: 20000 }, async () => {
+  const mock = mockFetch([
+    [/musicbrainz\.org\/ws\/2\/release-group\/\?/, musicbrainzSearch],
+    [/musicbrainz\.org\/ws\/2\/release-group\/b1392450/, musicbrainzDetail],
+    [/query\.wikidata\.org.*P166/, { results: { bindings: [{ item: wd("Q202996"), links: { value: "44" }, enwiki: { value: "https://en.wikipedia.org/wiki/OK_Computer" } }] } }],
+    [/query\.wikidata\.org/, { results: { bindings: [] } }],
+    [/en\.wikipedia\.org/, new TypeError("fetch failed")]
+  ]);
+  try {
+    const { status, partial, error } = await createSources().collect({ key: "k", artist: "Radiohead", album: "OK Computer" });
+    assert.equal(status, "ok");
+    assert.equal(partial, true);
+    assert.match(error, /wikipedia/);
+  } finally {
+    mock.restore();
   }
 });

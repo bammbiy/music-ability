@@ -80,3 +80,15 @@ test("community ratings stand in when no critic score exists", () => {
   assert.ok(result.criticTaste > 0);
   assert.equal(result.report.albums[0].qualityBasis, "audience");
 });
+
+test("thin evidence shrinks the acclaim share of the score", () => {
+  const weak = records.map(({ critics, ...record }) => ({ ...record, musicbrainz: { rating: 90, votes: 3 } }));
+  const strong = records.map((record) => ({ ...record, critics: [...record.critics, { source: "pitchfork", score: record.critics[0].score }, { source: "allmusic", score: record.critics[0].score }], musicbrainz: { rating: 85, votes: 400 } }));
+  const dataset = { tracks, artists: [], generatedAt: "2024-06-01T00:00:00Z" };
+  const weakResult = buildAnalysis(dataset, { acclaim: acclaimFor(weak) });
+  const strongResult = buildAnalysis(dataset, { acclaim: acclaimFor(strong) });
+  assert.ok(strongResult.acclaim.confidence > weakResult.acclaim.confidence);
+  assert.ok((strongResult.weights.criticTaste || 0) > (weakResult.weights.criticTaste || 0));
+  assert.equal(strongResult.acclaim.credibility === "high" || strongResult.acclaim.credibility === "medium", true);
+  assert.ok(strongResult.acclaim.evidence.criticReviews >= 9);
+});

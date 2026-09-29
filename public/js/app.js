@@ -11,7 +11,7 @@ const metricInfo = {
   discovery: { name: "발견 성향", help: "덜 알려진 아티스트를 많이 들을수록 높아요." },
   concentration: { name: "취향 확장성", help: "한 아티스트에 몰리지 않을수록 높아요." },
   newReleaseSense: { name: "신보 감도", help: "최근 6개월 안에 나온 음악을 들을수록 높아요." },
-  criticTaste: { name: "평단 감각", help: "평론가나 음악 커뮤니티가 높게 평가한 앨범을 들을수록 높아요." },
+  criticTaste: { name: "평단 감각", help: "평론가, 음악상, 청취자 커뮤니티가 높게 평가한 앨범을 들을수록 높아요." },
   hiddenGems: { name: "숨은 명반 발굴", help: "평단 평가는 높은데 덜 알려진 앨범을 들을수록 높아요." },
   mainstream: { name: "대중성", help: "인기 있는 곡을 많이 들을수록 높아요." }
 };
@@ -164,42 +164,71 @@ function renderKnobs(metrics, weights, acclaim) {
     .join("");
 }
 
+const CREDIBILITY_LABEL = { high: "높음", medium: "보통", low: "낮음", none: "없음" };
+const BASIS_LABEL = { critic: "평론 기준", audience: "청취자 평점 기준", awards: "수상 기준" };
+
 function renderAcclaim(acclaim, isSample) {
   const note = document.querySelector("#acclaim-note");
+  const trust = document.querySelector("#acclaim-trust");
   const list = document.querySelector("#acclaim-albums");
   if (!acclaim) return;
 
-  const found = `자주 듣는 앨범 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장의 평가를 찾았어요. 검은 칸은 평론 점수, 회색 칸은 평론 점수가 없어 청취자 평점으로 대신한 앨범이에요.`;
+  const found = `자주 듣는 앨범 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장의 평가를 찾았어요.`;
   const notes = {
     ready: found,
     updating: `${found} 나머지 ${acclaim.pending}장은 모으는 중이고, 화면은 자동으로 갱신돼요.`,
-    collecting: `앨범 ${acclaim.pending}장의 평론 점수를 모으고 있어요. 공개 API마다 요청 간격 제한이 있어서 앨범 하나에 몇 초씩 걸려요. 화면은 자동으로 갱신돼요.`,
-    unreachable: "평론 데이터 사이트(MusicBrainz, Wikidata)에 연결하지 못해서 평단 지표는 점수에서 뺐어요. 한 시간 뒤에 다시 시도해요.",
-    insufficient: `평론 점수가 있는 앨범이 ${acclaim.albumsTotal}장 중 ${acclaim.albumsWithData}장뿐이라, 평단 지표는 점수에서 뺐어요.`,
-    unavailable: "평론 점수 수집이 꺼져 있어요. 서버 설정에서 ACCLAIM_ENABLED를 확인해 주세요."
+    collecting: `앨범 ${acclaim.pending}장의 평가를 모으고 있어요. 공개 API마다 요청 간격 제한이 있어서 앨범 하나에 몇 초씩 걸려요. 화면은 자동으로 갱신돼요.`,
+    unreachable: "평가 데이터 사이트(MusicBrainz, Wikidata)에 연결하지 못해서 평단 지표는 점수에서 뺐어요. 한 시간 뒤에 다시 시도해요.",
+    insufficient: `믿을 만한 평가가 있는 앨범이 부족해서(${acclaim.albumsTotal}장 중 ${acclaim.reliableAlbums ?? 0}장) 평단 지표는 점수에서 뺐어요.`,
+    unavailable: "평가 수집이 꺼져 있어요. 서버 설정에서 ACCLAIM_ENABLED를 확인해 주세요."
   };
   note.textContent = isSample
     ? "예시 데이터예요. 실제 평론지의 점수가 아니라 화면 구성을 보여 주기 위한 값이에요."
     : notes[acclaim.status] || "";
 
+  const evidence = acclaim.evidence || {};
+  const parts = [
+    evidence.criticReviews ? `평론 ${evidence.criticReviews}건` : "",
+    evidence.awards ? `수상 ${evidence.awards}건` : "",
+    evidence.nominations ? `후보 ${evidence.nominations}건` : "",
+    evidence.votes ? `청취자 투표 ${evidence.votes.toLocaleString("ko-KR")}표` : ""
+  ].filter(Boolean);
+  trust.hidden = !acclaim.albumsWithData;
+  trust.className = `trust is-${escapeHtml(acclaim.credibility || "none")}`;
+  trust.innerHTML = `
+    <strong>신뢰도 ${CREDIBILITY_LABEL[acclaim.credibility] || "없음"}</strong>
+    <span>${parts.length ? `근거: ${parts.join(", ")}` : "근거가 아직 없어요"}. 근거가 적을수록 평단 지표가 점수에 덜 반영돼요.</span>
+  `;
+
   list.innerHTML = (acclaim.albums || [])
     .map((album) => {
-      const critics = (album.critics || [])
-        .slice(0, 4)
-        .map((review) => `${escapeHtml(review.label)} ${escapeHtml(review.raw)}`)
-        .join(", ");
+      const critics = album.critics || [];
+      const criticText = critics.length
+        ? `평론 ${critics.slice(0, 5).map((review) => `${escapeHtml(review.label)} ${escapeHtml(review.raw)}`).join(", ")}${critics.length > 5 ? ` 외 ${critics.length - 5}곳` : ""}`
+        : "";
+      const recognition = [
+        album.awards?.length ? `수상: ${album.awards.slice(0, 2).map(escapeHtml).join(", ")}` : "",
+        album.nominations?.length ? `후보: ${album.nominations.slice(0, 2).map(escapeHtml).join(", ")}` : ""
+      ].filter(Boolean).join(" / ");
       const facts = [
-        Number.isFinite(album.audienceScore) ? `청취자 평점 ${Math.round(album.audienceScore)}` : "",
+        album.audienceVotes ? `청취자 평점 ${Math.round(album.audienceScore)} (${album.audienceVotes}표)` : "",
+        album.sitelinks ? `위키백과 ${album.sitelinks}개 언어` : "",
         Number.isFinite(album.popularity) ? `대중성 ${clampPercent(album.popularity)}` : "",
         album.releaseDate ? `${escapeHtml(String(album.releaseDate).slice(0, 4))}년` : ""
       ].filter(Boolean).join(", ");
+      const confidence = Number.isFinite(album.confidence) ? Math.round(album.confidence * 100) : null;
+      const wikiUrl = album.wikipedia && critics.some((review) => review.via === "wikipedia")
+        ? safeHttpUrl(`https://en.wikipedia.org/wiki/${encodeURIComponent(album.wikipedia.replace(/ /g, "_"))}`)
+        : "";
       return `
         <li>
-          <span class="album-score${album.qualityBasis === "audience" ? " is-audience" : ""}" aria-label="${album.qualityBasis === "audience" ? "청취자 평점" : "평단 점수"} ${Math.round(album.qualityScore)}">${Math.round(album.qualityScore)}</span>
+          <span class="album-score is-${escapeHtml(album.qualityBasis || "audience")}" aria-label="평가 ${Math.round(album.qualityScore)}점, ${escapeHtml(BASIS_LABEL[album.qualityBasis] || "")}">${Math.round(album.qualityScore)}</span>
           <div>
             <strong>${escapeHtml(album.album)}${album.gem ? ' <em class="gem">숨은 명반</em>' : ""}</strong>
             <small>${escapeHtml(album.artist)}${facts ? `, ${facts}` : ""}</small>
-            <small class="album-critics">${critics || "평론 점수가 없어 MusicBrainz 청취자 평점으로 계산했어요."}</small>
+            ${criticText ? `<small class="album-critics">${criticText}</small>` : ""}
+            ${recognition ? `<small class="album-critics">${recognition}</small>` : ""}
+            <small class="album-meta">${escapeHtml(BASIS_LABEL[album.qualityBasis] || "")}${confidence !== null ? `, 근거 신뢰도 ${confidence}%` : ""}${wikiUrl ? `, <a href="${escapeHtml(wikiUrl)}" target="_blank" rel="noopener noreferrer">위키백과 평가표</a>` : ""}</small>
           </div>
         </li>
       `;

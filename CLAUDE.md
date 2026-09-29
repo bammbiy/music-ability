@@ -14,7 +14,7 @@ Music Ability analyzes a user's music taste (genre spread, depth, discovery) fro
 
 - `server/app.js`: HTTP server, routing, Spotify OAuth, Apple Music, media feed.
 - `server/analysis.js`: pure analysis engine (`buildAnalysis`), metric weights (`SCORE_WEIGHTS`).
-- `server/acclaim/`: album critic/listener scores. `score.js` (pure parsing, normalization, calibration), `match.js` (pure title/artist matching), `sources.js` (MusicBrainz, Wikidata, Discogs, Last.fm fetchers), `index.js` (cache + background queue).
+- `server/acclaim/`: album critic/listener scores. `score.js` (pure parsing, normalization, calibration), `match.js` (pure title/artist matching), `wikipedia.js` (pure ratings-box parser), `sources.js` (MusicBrainz, Wikidata, Discogs, Last.fm fetchers), `index.js` (cache + background queue).
 - `tests/`: `node --test` unit tests; external APIs are mocked.
 - `server/store.js`: `node:sqlite` storage for consented quality data and the public album score cache (`data/music-ability.sqlite`, git-ignored).
 - `public/`: landing page (`index.html`, `js/home.js`) and dashboard (`dashboard.html`, `js/app.js`).
@@ -27,4 +27,5 @@ Music Ability analyzes a user's music taste (genre spread, depth, discovery) fro
 - Never store OAuth tokens, emails, display names, or raw listening lists. Only save data after the user consents, and key it by the HMAC user ID (`hashProviderAccount`).
 - Server errors return generic codes (`HttpError`). Do not leak upstream error details to the client.
 - New external `fetch` calls need `AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS)`.
+- Popularity or attention alone must never produce a quality score; it only nudges an estimate backed by critics, awards or ratings (`combineEvidence`).
 - Music data comes only from official APIs or open data. Never scrape sites whose terms forbid automated access (RateYourMusic, Metacritic, AOTY, etc.).

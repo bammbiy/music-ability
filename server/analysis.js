@@ -21,6 +21,11 @@ const ACCLAIM_MIN_COVERAGE = 0.3;
 const ACCLAIM_MIN_ALBUMS = 3;
 const GEM_MIN_CRITIC = 78;
 const GEM_MAX_POPULARITY = 45;
+const GEM_MIN_CONFIDENCE = 0.4;
+const RELIABLE_ALBUM_CONFIDENCE = 0.3;
+// Acclaim metrics reach their full share of the score at this confidence;
+// below it their weight shrinks so thin evidence moves the score less.
+const ACCLAIM_FULL_CONFIDENCE = 0.6;
 const MIN_POPULATION = 30;
 
 export function buildAnalysis(dataset, { acclaim = null, population = [] } = {}) {
@@ -72,7 +77,9 @@ export function buildAnalysis(dataset, { acclaim = null, population = [] } = {})
     criticTaste: acclaimResult.criticTaste,
     hiddenGems: acclaimResult.hiddenGems
   };
-  const score = weightedScore(parts);
+  const acclaimScale = Math.min(1, acclaimResult.confidence / ACCLAIM_FULL_CONFIDENCE);
+  const weights = { ...SCORE_WEIGHTS, criticTaste: SCORE_WEIGHTS.criticTaste * acclaimScale, hiddenGems: SCORE_WEIGHTS.hiddenGems * acclaimScale };
+  const score = weightedScore(parts, weights);
 
   return {
     source: dataset.source,
@@ -89,7 +96,7 @@ export function buildAnalysis(dataset, { acclaim = null, population = [] } = {})
       mainstream,
       label: scoreLabel(score)
     },
-    weights: activeWeights(parts),
+    weights: activeWeights(parts, weights),
     percentile: percentileOf(score, population),
     acclaim: acclaimResult.report,
     buckets: withPercent(buckets).slice(0, 8),
@@ -208,10 +215,10 @@ function average(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function weightedScore(parts) {
+function weightedScore(parts, table = SCORE_WEIGHTS) {
   let total = 0;
   let weights = 0;
-  for (const [key, weight] of Object.entries(SCORE_WEIGHTS)) {
+  for (const [key, weight] of Object.entries(table)) {
     if (!Number.isFinite(parts[key])) continue;
     total += parts[key] * weight;
     weights += weight;
@@ -219,8 +226,8 @@ function weightedScore(parts) {
   return weights ? Math.round(total / weights) : 0;
 }
 
-function activeWeights(parts) {
-  const active = Object.entries(SCORE_WEIGHTS).filter(([key]) => Number.isFinite(parts[key]));
+function activeWeights(parts, table = SCORE_WEIGHTS) {
+  const active = Object.entries(table).filter(([key, weight]) => Number.isFinite(parts[key]) && weight > 0);
   const sum = active.reduce((total, [, weight]) => total + weight, 0) || 1;
   return Object.fromEntries(active.map(([key, weight]) => [key, Math.round((weight / sum) * 100)]));
 }
@@ -260,14 +267,16 @@ export function acclaimMetrics(tracks, acclaim) {
     criticTaste: null,
     hiddenGems: null,
     averageCritic: null,
-    report: { status, coverage: 0, albumsTotal: acclaim?.total || 0, albumsWithData: 0, pending: acclaim?.pending || 0, albums: [], ...extra }
+    confidence: 0,
+    report: { status, coverage: 0, confidence: 0, credibility: "none", albumsTotal: acclaim?.total || 0, albumsWithData: 0, pending: acclaim?.pending || 0, evidence: emptyTotals(), albums: [], ...extra }
   });
   if (!acclaim || !acclaim.enabled) return empty("unavailable");
 
   const albums = new Map();
   let totalWeight = 0;
   let coveredWeight = 0;
-  let criticSum = 0;
+  let trustWeight = 0;
+  let qualitySum = 0;
   let gemWeight = 0;
 
   tracks.forEach((track, index) => {
@@ -279,11 +288,15 @@ export function acclaimMetrics(tracks, acclaim) {
     const summary = acclaim.summaries.get(key);
     if (!summary || !Number.isFinite(summary.qualityScore)) return;
 
+    // Albums with more and stronger evidence count for more.
+    const confidence = Number.isFinite(summary.confidence) ? summary.confidence : 0.5;
+    const trusted = weight * confidence;
     coveredWeight += weight;
-    criticSum += summary.qualityScore * weight;
+    trustWeight += trusted;
+    qualitySum += summary.qualityScore * trusted;
     const popularity = Number.isFinite(summary.popularity) ? summary.popularity : track.popularity;
-    const gem = summary.qualityScore >= GEM_MIN_CRITIC && Number.isFinite(popularity) && popularity < GEM_MAX_POPULARITY;
-    if (gem) gemWeight += weight;
+    const gem = summary.qualityScore >= GEM_MIN_CRITIC && confidence >= GEM_MIN_CONFIDENCE && Number.isFinite(popularity) && popularity < GEM_MAX_POPULARITY;
+    if (gem) gemWeight += trusted;
 
     const entry = albums.get(key) || { ...summary, popularity: Number.isFinite(popularity) ? Math.round(popularity) : null, gem, weight: 0 };
     entry.weight += weight;
@@ -291,29 +304,54 @@ export function acclaimMetrics(tracks, acclaim) {
   });
 
   const coverage = totalWeight ? coveredWeight / totalWeight : 0;
-  const list = [...albums.values()]
-    .sort((a, b) => b.weight - a.weight)
-    .map(({ weight, key, ...album }) => album);
+  const confidence = totalWeight ? trustWeight / totalWeight : 0;
+  const list = [...albums.values()].sort((a, b) => b.weight - a.weight);
+  const reliableAlbums = list.filter((album) => album.confidence >= RELIABLE_ALBUM_CONFIDENCE).length;
   const base = {
     coverage: Math.round(coverage * 100),
+    confidence: Math.round(confidence * 100),
+    credibility: credibilityLevel(confidence),
     albumsTotal: acclaim.total,
     albumsWithData: albums.size,
+    reliableAlbums,
     pending: acclaim.pending,
-    albums: list.slice(0, 10)
+    evidence: evidenceTotals(list),
+    albums: list.slice(0, 10).map(({ weight, key, ...album }) => album)
   };
 
-  if (coverage < ACCLAIM_MIN_COVERAGE || albums.size < ACCLAIM_MIN_ALBUMS) {
+  if (coverage < ACCLAIM_MIN_COVERAGE || reliableAlbums < ACCLAIM_MIN_ALBUMS) {
     const status = acclaim.pending ? "collecting" : acclaim.failed > (acclaim.total - albums.size) / 2 ? "unreachable" : "insufficient";
     return { ...empty(status), report: { status, ...base } };
   }
 
-  const averageCritic = criticSum / coveredWeight;
+  const averageCritic = qualitySum / trustWeight;
   return {
     criticTaste: Math.round(clamp(((averageCritic - 55) / (88 - 55)) * 100)),
-    hiddenGems: Math.round(clamp(((gemWeight / coveredWeight) / 0.35) * 100)),
+    hiddenGems: Math.round(clamp(((gemWeight / trustWeight) / 0.35) * 100)),
     averageCritic,
+    confidence,
     report: { status: acclaim.pending ? "updating" : "ready", ...base }
   };
+}
+
+function credibilityLevel(confidence) {
+  if (confidence >= 0.55) return "high";
+  if (confidence >= 0.35) return "medium";
+  if (confidence > 0) return "low";
+  return "none";
+}
+
+function emptyTotals() {
+  return { criticReviews: 0, awards: 0, nominations: 0, votes: 0 };
+}
+
+function evidenceTotals(albums) {
+  return albums.reduce((totals, album) => ({
+    criticReviews: totals.criticReviews + (album.criticCount || 0),
+    awards: totals.awards + (album.awards?.length || 0),
+    nominations: totals.nominations + (album.nominations?.length || 0),
+    votes: totals.votes + (album.audienceVotes || 0)
+  }), emptyTotals());
 }
 
 // Where this score sits among everyone who consented to store results.

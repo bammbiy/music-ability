@@ -51,11 +51,47 @@ const CRITIC_SOURCE_NAMES = new Set([
   "the a.v. club", "under the radar", "loud and quiet", "the skinny", "dork", "diy", "the quietus"
 ]);
 
+// Other spellings of outlets in the table, as they appear on Wikipedia.
+const OUTLET_ALIASES = {
+  "christgau's consumer guide": "robert christgau",
+  "christgau's record guide": "robert christgau",
+  "the village voice (christgau)": "robert christgau",
+  guardian: "the guardian",
+  "rolling stone album guide": "rolling stone",
+  "the rolling stone album guide": "rolling stone",
+  "metacritic (critics)": "metacritic",
+  anydecentmusic: "anydecentmusic",
+  "anydecentmusic?": "anydecentmusic",
+  "aoty": "album of the year",
+  "consequence of sound": "consequence"
+};
+
+const CRITIC_SOURCES_BY_NAME = Object.fromEntries(
+  Object.values(CRITIC_SOURCES).flatMap((source) => [[source.name.toLowerCase(), source], [source.key, source]])
+);
+
+function outletName(label) {
+  return String(label || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export function criticSourceFor(qid, label) {
-  if (CRITIC_SOURCES[qid]) return CRITIC_SOURCES[qid];
-  const name = String(label || "").toLowerCase();
+  if (qid && CRITIC_SOURCES[qid]) return CRITIC_SOURCES[qid];
+  const raw = outletName(label);
+  const name = OUTLET_ALIASES[raw] || raw;
+  if (CRITIC_SOURCES_BY_NAME[name]) return CRITIC_SOURCES_BY_NAME[name];
   if (CRITIC_SOURCE_NAMES.has(name)) return { key: name, name: label, scale: null, weight: 1 };
   return null;
+}
+
+// Wikipedia's ratings box only lists professional outlets (editors enforce it),
+// so outlets outside our table are still accepted there, as long as the score
+// carries its own scale ("7/10", "B+").
+export function wikipediaOutletFor(label) {
+  const known = criticSourceFor(null, label);
+  if (known) return known;
+  const name = outletName(label);
+  if (!name || name.length > 60) return null;
+  return { key: name, name: String(label).trim(), scale: null, weight: 1 };
 }
 
 const SOURCE_WEIGHT_BY_KEY = Object.fromEntries(Object.values(CRITIC_SOURCES).map((source) => [source.key, source.weight]));
@@ -100,7 +136,7 @@ export function parseReviewScore(raw, bareScale = null) {
     return null;
   }
 
-  const letter = value.toUpperCase().replace(/\s+/g, "");
+  const letter = value.toUpperCase().replace(/[−–—]/g, "-").replace(/\s+/g, "");
   if (letter in LETTER_GRADES) return LETTER_GRADES[letter];
 
   const stars = [...value].filter((character) => character === "★").length;
@@ -192,10 +228,23 @@ export function summarizeAlbum(record, calibration = {}) {
     ? round1(audienceParts.reduce((sum, part) => sum + part.score, 0) / audienceParts.length)
     : null;
 
-  const popularity = popularityFromListeners(record.lastfm?.listeners);
-  // Critic coverage on open data is thin outside well-known Western albums, so
-  // the community rating stands in when no critic score exists.
-  const qualityBasis = criticScore !== null ? "critic" : audienceScore !== null ? "audience" : null;
+  const audienceVotes = audienceParts.reduce((sum, part) => sum + part.votes, 0);
+  const popularity = popularityFromListeners(record.lastfm?.listeners) ?? popularityFromListenBrainz(record.listenbrainz?.users);
+  const recognition = record.recognition || {};
+  const awards = recognition.awards || [];
+  const nominations = recognition.nominations || [];
+  const sitelinks = recognition.sitelinks || 0;
+
+  const { qualityScore, confidence, qualityBasis, evidence } = combineEvidence({
+    criticScore,
+    criticCount: critics.length,
+    audienceScore,
+    audienceVotes,
+    awards: awards.length,
+    nominations: nominations.length,
+    sitelinks,
+    popularity
+  });
 
   return {
     key: record.key,
@@ -204,15 +253,82 @@ export function summarizeAlbum(record, calibration = {}) {
     releaseDate: record.releaseDate || "",
     criticScore,
     criticCount: critics.length,
-    critics: critics.map((review) => ({ source: review.source, label: review.label || review.source, raw: review.raw, score: review.score })),
+    critics: critics.map((review) => ({ source: review.source, label: review.label || review.source, raw: review.raw, score: review.score, via: review.via || "wikidata" })),
     audienceScore,
-    qualityScore: qualityBasis === "critic" ? criticScore : audienceScore,
+    audienceVotes,
+    awards,
+    nominations,
+    sitelinks,
+    wikipedia: record.wikipedia?.title || "",
+    qualityScore,
     qualityBasis,
+    confidence,
+    evidence,
     popularity,
     collectorRatio: record.discogs?.have > 0 ? round1((record.discogs.want || 0) / record.discogs.have) : null,
     sources: record.sources || [],
     sample: Boolean(record.sample)
   };
+}
+
+// Evidence weights. Each signal estimates how well regarded an album is and
+// carries a weight for how much that estimate can be trusted. Critics and
+// awards are direct judgments of quality; community ratings count by number of
+// votes; how widely the album is documented and how many people play it say
+// more about attention than quality, so they only nudge the estimate.
+export const EVIDENCE_WEIGHTS = {
+  criticBase: 1,
+  criticPerExtraOutlet: 0.4,
+  criticMax: 3,
+  audienceMax: 1.5,
+  audienceHalfVotes: 20,
+  awardWin: 0.75,
+  awardWinMax: 1.5,
+  nomination: 0.3,
+  nominationMax: 0.8,
+  notability: 0.25,
+  popularity: 0.15
+};
+
+// How much total weight equals 50% confidence.
+const CONFIDENCE_HALF_WEIGHT = 1.5;
+
+export function combineEvidence({ criticScore, criticCount = 0, audienceScore, audienceVotes = 0, awards = 0, nominations = 0, sitelinks = 0, popularity = null }) {
+  const w = EVIDENCE_WEIGHTS;
+  const evidence = [];
+  if (Number.isFinite(criticScore)) {
+    evidence.push({ kind: "critic", score: criticScore, weight: Math.min(w.criticMax, w.criticBase + w.criticPerExtraOutlet * Math.max(0, criticCount - 1)) });
+  }
+  if (Number.isFinite(audienceScore) && audienceVotes > 0) {
+    evidence.push({ kind: "audience", score: audienceScore, weight: (w.audienceMax * audienceVotes) / (audienceVotes + w.audienceHalfVotes) });
+  }
+  if (awards > 0) evidence.push({ kind: "awards", score: 90, weight: Math.min(w.awardWinMax, w.awardWin * awards) });
+  if (nominations > 0) evidence.push({ kind: "nominations", score: 82, weight: Math.min(w.nominationMax, w.nomination * nominations) });
+  if (sitelinks >= 5) evidence.push({ kind: "notability", score: clamp(64 + 8 * Math.log10(sitelinks)), weight: w.notability });
+  if (Number.isFinite(popularity)) evidence.push({ kind: "popularity", score: 66 + popularity * 0.08, weight: w.popularity });
+
+  const totalWeight = evidence.reduce((sum, item) => sum + item.weight, 0);
+  const direct = evidence.filter((item) => ["critic", "audience", "awards", "nominations"].includes(item.kind));
+  if (!direct.length) {
+    return { qualityScore: null, confidence: 0, qualityBasis: null, evidence: evidence.map(roundEvidence) };
+  }
+  const qualityScore = round1(evidence.reduce((sum, item) => sum + item.score * item.weight, 0) / totalWeight);
+  const confidence = Math.round((totalWeight / (totalWeight + CONFIDENCE_HALF_WEIGHT)) * 100) / 100;
+  const strongest = [...direct].sort((a, b) => b.weight - a.weight)[0];
+  const qualityBasis = strongest.kind === "nominations" ? "awards" : strongest.kind;
+  return { qualityScore, confidence, qualityBasis, evidence: evidence.map(roundEvidence) };
+}
+
+function roundEvidence(item) {
+  return { kind: item.kind, score: round1(item.score), weight: Math.round(item.weight * 100) / 100 };
+}
+
+// Maps ListenBrainz listener counts onto 0-100: 10 listeners -> 0, 20k -> 100.
+// ListenBrainz is far smaller than Last.fm, hence the lower range.
+export function popularityFromListenBrainz(users) {
+  const count = Number(users);
+  if (!Number.isFinite(count) || count <= 0) return null;
+  return clamp(Math.round(((Math.log10(count) - 1) / (Math.log10(20_000) - 1)) * 100));
 }
 
 export function clamp(value, min = 0, max = 100) {

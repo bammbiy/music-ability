@@ -83,10 +83,35 @@ Google OAuth와 YouTube Data API는 유튜브 계정, 채널, 영상, 플레이�
 
 | 출처 | 가져오는 값 | 설정 |
 | --- | --- | --- |
-| MusicBrainz | 앨범 식별(MBID), 발매일, 커뮤니티 평점 | 기본 사용, `ACCLAIM_CONTACT` 권장 |
-| Wikidata | 매체별 평론 점수 | 기본 사용 |
+| MusicBrainz | 앨범 식별(MBID), 발매일, 커뮤니티 평점과 투표 수 | 기본 사용, `ACCLAIM_CONTACT` 권장 |
+| Wikidata | 매체별 평론 점수, 수상(P166)·후보(P1411), 위키백과 등재 언어 수 | 기본 사용 |
+| 영어 위키백과 | 앨범 문서의 평가표(Music ratings): 매체별 점수, Metacritic | 기본 사용 (CC BY-SA, 화면에 원문 링크) |
+| ListenBrainz | 앨범 청취자 수 (대중성) | 기본 사용 |
 | Discogs | 커뮤니티 평점, 소장/위시리스트 수 | `DISCOGS_TOKEN` |
-| Last.fm | 청취자 수, 재생 수 | `LASTFM_API_KEY` |
+| Last.fm | 청취자 수, 재생 수 (대중성) | `LASTFM_API_KEY` |
+
+필요한 네트워크 허용 도메인: `musicbrainz.org`, `query.wikidata.org`, `en.wikipedia.org`, `api.listenbrainz.org` (선택: `api.discogs.com`, `ws.audioscrobbler.com`)
+
+### 신빙성 모델
+
+앨범마다 근거를 모아 하나의 평가 점수와 **근거 신뢰도**를 계산합니다(`combineEvidence`, `server/acclaim/score.js`).
+
+| 근거 | 역할 | 가중치 |
+| --- | --- | --- |
+| 평론 점수 | 품질의 직접 근거 | 매체 1곳 1.0, 1곳 늘 때마다 +0.4 (최대 3) |
+| 청취자 평점 | 품질의 직접 근거 | 투표 수에 비례 (20표에 0.75, 최대 1.5) |
+| 수상 / 후보 | 품질의 직접 근거 | 수상 0.75씩(최대 1.5), 후보 0.3씩(최대 0.8) |
+| 위키백과 등재 언어 수 | 주목도, 보조 | 0.25 |
+| 대중성 (ListenBrainz, Last.fm) | 주목도, 보조 | 0.15 |
+
+- 주목도·대중성만 있는 앨범에는 평가 점수를 매기지 않습니다. 인기가 곧 품질은 아니기 때문입니다.
+- 판매 인증(골드, 플래티넘)은 수상으로 세지 않습니다.
+- 근거 신뢰도 = 가중치 합 / (가중치 합 + 1.5). 평단 지표는 청취 비중만큼 신뢰도를 반영해 계산하고, 전체 신뢰도가 60% 미만이면 평단 지표가 점수에 반영되는 비중도 그만큼 줄어듭니다.
+- 대시보드에 전체 신뢰도(높음/보통/낮음)와 근거 수(평론 N건, 수상 N건, 투표 N표), 앨범별 근거를 표시합니다.
+
+### 쓰지 않는 출처
+
+커뮤니티 반응(Reddit, 디시인사이드, 더쿠 등), 음악 평가 사이트(RateYourMusic, Metacritic, AOTY, Pitchfork), 웹진 칼럼(IZM 등)은 직접 수집하지 않습니다. 공식 API가 없거나 이용약관이 자동 수집을 금지합니다(Reddit API는 상업적 이용과 학습에 별도 계약이 필요). 이런 매체의 점수는 Wikidata와 위키백과에 공개적으로 정리된 범위에서만 반영됩니다.
 
 - Wikidata의 매체 점수는 음악 매체 허용 목록(Metacritic, AllMusic, Pitchfork, Album of the Year 등)만 사용합니다. 사운드트랙 항목에 붙은 영화·게임 점수(IMDb, Rotten Tomatoes, IGN 등)는 버립니다. 만점 표기 없이 숫자만 있는 점수는 매체별 만점 기준으로 환산합니다.
 - 공개 데이터의 평론 점수는 영미권 유명 앨범 위주라 K-pop, J-pop, 인디 앨범은 비어 있는 경우가 많습니다. 평론 점수가 없는 앨범은 MusicBrainz 청취자 평점(투표 수가 적으면 평균 쪽으로 보정)으로 대신합니다.

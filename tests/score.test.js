@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   albumKey,
   calibrateScore,
+  combineEvidence,
   criticSourceFor,
   learnSourceCalibration,
   parseReviewScore,
@@ -96,4 +97,28 @@ test("album summary weights Metacritic above single outlets", () => {
   assert.equal(summary.criticCount, 2);
   assert.equal(summary.audienceScore, 75);
   assert.equal(summary.popularity, 0);
+});
+
+test("popularity alone never produces a quality score", () => {
+  const onlyAttention = combineEvidence({ sitelinks: 40, popularity: 95 });
+  assert.equal(onlyAttention.qualityScore, null);
+  assert.equal(onlyAttention.confidence, 0);
+});
+
+test("more and stronger evidence raises confidence", () => {
+  const thin = combineEvidence({ audienceScore: 80, audienceVotes: 2 });
+  const critics = combineEvidence({ criticScore: 80, criticCount: 6 });
+  const full = combineEvidence({ criticScore: 80, criticCount: 6, audienceScore: 82, audienceVotes: 300, awards: 1, sitelinks: 30 });
+  assert.ok(thin.confidence < 0.15);
+  assert.ok(critics.confidence > thin.confidence);
+  assert.ok(full.confidence > critics.confidence);
+  assert.equal(full.qualityBasis, "critic");
+});
+
+test("awards lift an album's estimate, attention only nudges it", () => {
+  const base = combineEvidence({ criticScore: 75, criticCount: 1 });
+  const awarded = combineEvidence({ criticScore: 75, criticCount: 1, awards: 2 });
+  const famous = combineEvidence({ criticScore: 75, criticCount: 1, sitelinks: 60, popularity: 100 });
+  assert.ok(awarded.qualityScore - base.qualityScore > 5);
+  assert.ok(Math.abs(famous.qualityScore - base.qualityScore) < 2);
 });

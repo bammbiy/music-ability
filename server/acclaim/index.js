@@ -7,7 +7,7 @@ import { albumKey, learnSourceCalibration, summarizeAlbum } from "./score.js";
 import { getAlbumScores, listAlbumRecords, saveAlbumScore } from "../store.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const TTL_MS = { ok: 30 * DAY_MS, not_found: 7 * DAY_MS, error: 60 * 60 * 1000 };
+const TTL_MS = { ok: 30 * DAY_MS, partial: DAY_MS, not_found: 7 * DAY_MS, error: 60 * 60 * 1000 };
 const MAX_QUEUE = 2000;
 const CALIBRATION_TTL_MS = 30 * 60 * 1000;
 
@@ -70,8 +70,8 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
     while (queue.length) {
       const item = queue.shift();
       try {
-        const { status, record, error } = await sources.collect(item);
-        saveAlbumScore({ ...item, status, record, ttlMs: TTL_MS[status] });
+        const { status, partial, record, error } = await sources.collect(item);
+        saveAlbumScore({ ...item, status, record, ttlMs: partial ? TTL_MS.partial : TTL_MS[status] });
         if (error) console.warn(`acclaim: ${item.artist} - ${item.album}: ${error}`);
       } catch (error) {
         console.error("acclaim: collection failed", error);
