@@ -27,5 +27,6 @@ Music Ability analyzes a user's music taste (genre spread, depth, discovery) fro
 - Never store OAuth tokens, emails, display names, or raw listening lists. Only save data after the user consents, and key it by the HMAC user ID (`hashProviderAccount`).
 - Server errors return generic codes (`HttpError`). Do not leak upstream error details to the client.
 - New external `fetch` calls need `AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS)`.
+- A user's own album ratings must never count toward their own analysis (`excludeUserId` in the acclaim lookup); ratings only come from consented users and only for albums in their current listening data.
 - Popularity or attention alone must never produce a quality score; it only nudges an estimate backed by critics, awards or ratings (`combineEvidence`).
 - Music data comes only from official APIs or open data. Never scrape sites whose terms forbid automated access (RateYourMusic, Metacritic, AOTY, etc.).

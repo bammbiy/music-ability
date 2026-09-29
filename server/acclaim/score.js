@@ -203,7 +203,8 @@ export function calibrateScore(source, score, calibration = {}) {
 }
 
 // Combines one album's raw source data into comparable scores.
-export function summarizeAlbum(record, calibration = {}) {
+// `community` is { average (1-10), votes } from Music Ability users, if any.
+export function summarizeAlbum(record, calibration = {}, community = null) {
   const critics = (record.critics || []).filter((review) => Number.isFinite(review.score));
   let criticScore = null;
   if (critics.length) {
@@ -235,11 +236,16 @@ export function summarizeAlbum(record, calibration = {}) {
   const nominations = recognition.nominations || [];
   const sitelinks = recognition.sitelinks || 0;
 
+  const communityVotes = community?.votes || 0;
+  const communityScore = communityVotes > 0 ? shrinkRating(community.average * 10, communityVotes) : null;
+
   const { qualityScore, confidence, qualityBasis, evidence } = combineEvidence({
     criticScore,
     criticCount: critics.length,
     audienceScore,
     audienceVotes,
+    communityScore,
+    communityVotes,
     awards: awards.length,
     nominations: nominations.length,
     sitelinks,
@@ -256,6 +262,8 @@ export function summarizeAlbum(record, calibration = {}) {
     critics: critics.map((review) => ({ source: review.source, label: review.label || review.source, raw: review.raw, score: review.score, via: review.via || "wikidata" })),
     audienceScore,
     audienceVotes,
+    communityAverage: communityVotes > 0 ? Math.round(community.average * 10) / 10 : null,
+    communityVotes,
     awards,
     nominations,
     sitelinks,
@@ -293,7 +301,7 @@ export const EVIDENCE_WEIGHTS = {
 // How much total weight equals 50% confidence.
 const CONFIDENCE_HALF_WEIGHT = 1.5;
 
-export function combineEvidence({ criticScore, criticCount = 0, audienceScore, audienceVotes = 0, awards = 0, nominations = 0, sitelinks = 0, popularity = null }) {
+export function combineEvidence({ criticScore, criticCount = 0, audienceScore, audienceVotes = 0, communityScore = null, communityVotes = 0, awards = 0, nominations = 0, sitelinks = 0, popularity = null }) {
   const w = EVIDENCE_WEIGHTS;
   const evidence = [];
   if (Number.isFinite(criticScore)) {
@@ -302,13 +310,17 @@ export function combineEvidence({ criticScore, criticCount = 0, audienceScore, a
   if (Number.isFinite(audienceScore) && audienceVotes > 0) {
     evidence.push({ kind: "audience", score: audienceScore, weight: (w.audienceMax * audienceVotes) / (audienceVotes + w.audienceHalfVotes) });
   }
+  // Music Ability users: same shape as other community ratings.
+  if (Number.isFinite(communityScore) && communityVotes > 0) {
+    evidence.push({ kind: "members", score: communityScore, weight: (w.audienceMax * communityVotes) / (communityVotes + w.audienceHalfVotes) });
+  }
   if (awards > 0) evidence.push({ kind: "awards", score: 90, weight: Math.min(w.awardWinMax, w.awardWin * awards) });
   if (nominations > 0) evidence.push({ kind: "nominations", score: 82, weight: Math.min(w.nominationMax, w.nomination * nominations) });
   if (sitelinks >= 5) evidence.push({ kind: "notability", score: clamp(64 + 8 * Math.log10(sitelinks)), weight: w.notability });
   if (Number.isFinite(popularity)) evidence.push({ kind: "popularity", score: 66 + popularity * 0.08, weight: w.popularity });
 
   const totalWeight = evidence.reduce((sum, item) => sum + item.weight, 0);
-  const direct = evidence.filter((item) => ["critic", "audience", "awards", "nominations"].includes(item.kind));
+  const direct = evidence.filter((item) => ["critic", "audience", "members", "awards", "nominations"].includes(item.kind));
   if (!direct.length) {
     return { qualityScore: null, confidence: 0, qualityBasis: null, evidence: evidence.map(roundEvidence) };
   }

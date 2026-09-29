@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteUserData, getAlbumCacheStats, getLatestScores, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
+import { deleteAlbumRating, deleteUserData, getAlbumCacheStats, getLatestScores, getUserRatings, saveAlbumRating, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
+import { albumKey } from "./acclaim/score.js";
 import { buildAnalysis } from "./analysis.js";
 import { createAcclaimService } from "./acclaim/index.js";
 import { demoDataset } from "./demo.js";
@@ -157,6 +158,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/feedback" && req.method === "POST") {
       return handleFeedback(req, res);
+    }
+
+    if (url.pathname === "/api/ratings" && req.method === "POST") {
+      return handleAlbumRating(req, res);
     }
 
     return serveStatic(res, url.pathname);
@@ -321,16 +326,19 @@ async function handleAnalysis(req, res, url) {
   return sendJson(res, analyzeForSession(session, dataset));
 }
 
-function analyze(dataset, { sample = false } = {}) {
+function analyze(dataset, { sample = false, userId = "" } = {}) {
   const albums = (dataset.tracks || []).map((track) => ({ artist: track.artists?.[0]?.name, album: track.album }));
   return buildAnalysis(dataset, {
-    acclaim: acclaim.lookup(albums, { sample }),
+    acclaim: acclaim.lookup(albums, { sample, excludeUserId: userId }),
     population: sample ? [] : populationScores()
   });
 }
 
 function analyzeForSession(session, dataset) {
-  const analysis = analyze(dataset);
+  const analysis = analyze(dataset, { userId: session.userId || "" });
+  const mine = getUserRatings(session.analysisConsent ? session.userId : "", analysis.listenedAlbums.map((album) => album.key));
+  analysis.listenedAlbums = analysis.listenedAlbums.map((album) => ({ ...album, myRating: mine.get(album.key) ?? null }));
+  analysis.ratingsEnabled = Boolean(session.analysisConsent && session.userId);
   const settled = !["collecting", "updating"].includes(analysis.acclaim.status);
   // Store one snapshot per dataset, once album scores have settled.
   if (settled && !session.lastDatasetSaved && session.analysisConsent && session.userId) {
@@ -556,6 +564,38 @@ function handleDisconnect(req, res) {
   }
   res.setHeader("Set-Cookie", sessionCookie("", 0));
   return sendJson(res, { disconnected: true, deleted: true });
+}
+
+// Album ratings from users who consented to data collection. Only albums in
+// the user's own current listening data can be rated, which keeps ratings tied
+// to real listening and limits spam. rating: 1-10, or null to remove.
+async function handleAlbumRating(req, res) {
+  const session = getSession(req);
+  if (!session?.userId || !session.analysisConsent) {
+    return sendJson(res, { error: "consent_required" }, 403);
+  }
+  if (!session.lastDataset) {
+    return sendJson(res, { error: "analysis_required" }, 409);
+  }
+
+  const payload = await readJson(req);
+  const key = String(payload.key || "");
+  const rating = payload.rating === null ? null : Number(payload.rating);
+  if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 10)) {
+    return sendJson(res, { error: "invalid_rating" }, 400);
+  }
+
+  const track = (session.lastDataset.tracks || []).find((item) => albumKey(item.artists?.[0]?.name, item.album) === key);
+  if (!key || !track) {
+    return sendJson(res, { error: "album_not_in_listening" }, 400);
+  }
+
+  if (rating === null) {
+    deleteAlbumRating({ userId: session.userId, key });
+  } else {
+    saveAlbumRating({ userId: session.userId, key, artist: String(track.artists[0].name).slice(0, 200), album: String(track.album).slice(0, 300), rating });
+  }
+  return sendJson(res, { saved: true, key, rating });
 }
 
 async function handleFeedback(req, res) {

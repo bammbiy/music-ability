@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { createSources } from "./sources.js";
 import { albumKey, learnSourceCalibration, summarizeAlbum } from "./score.js";
-import { getAlbumScores, listAlbumRecords, saveAlbumScore } from "../store.js";
+import { getAlbumScores, getCommunityRatings, listAlbumRecords, saveAlbumScore } from "../store.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TTL_MS = { ok: 30 * DAY_MS, partial: DAY_MS, not_found: 7 * DAY_MS, error: 60 * 60 * 1000 };
@@ -19,7 +19,9 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
   let running = false;
   let calibration = { value: {}, expiresAt: 0 };
 
-  function lookup(albums, { sample = false } = {}) {
+  // excludeUserId: the viewer, whose own album ratings must not count toward
+  // their own result.
+  function lookup(albums, { sample = false, excludeUserId = "" } = {}) {
     const wanted = new Map();
     for (const item of albums) {
       const key = albumKey(item.artist, item.album);
@@ -41,10 +43,15 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
     }
 
     const cached = getAlbumScores([...wanted.keys()]);
+    const community = getCommunityRatings([...wanted.keys()], excludeUserId);
     for (const [key, item] of wanted) {
       const hit = cached.get(key);
+      const members = community.get(key) || null;
       if (hit?.status === "ok") {
-        summaries.set(key, summarizeAlbum(hit.record, currentCalibration()));
+        summaries.set(key, summarizeAlbum(hit.record, currentCalibration(), members));
+      } else if (members && hit) {
+        // No open data for this album, but Music Ability users rated it.
+        summaries.set(key, summarizeAlbum({ ...item, critics: [], sources: ["members"] }, currentCalibration(), members));
       } else if (hit?.status === "error") {
         failed += 1;
       } else if (hit) {

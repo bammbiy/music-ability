@@ -602,6 +602,64 @@ a {
   background: var(--signal);
 }
 
+.album-score.is-members {
+  background: var(--cap-green);
+}
+
+.rate-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rate-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--plate);
+}
+
+.rate-list li:last-child {
+  border-bottom: 0;
+}
+
+.rate-list strong {
+  display: block;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.rate-list small {
+  color: var(--ink-soft);
+  font-size: var(--step--1);
+}
+
+.rate-list select {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--plate-lo);
+  border-radius: 999px;
+  background: var(--plate);
+  color: var(--ink);
+  font: inherit;
+}
+
+.rate-list select:disabled {
+  opacity: 0.5;
+}
+
+.rate-status {
+  grid-column: 1 / -1;
+}
+
+.rate-status:empty {
+  display: none;
+}
+
 .album-meta {
   margin-top: 2px;
 }

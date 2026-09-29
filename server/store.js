@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const databasePath = join(process.cwd(), "data", "music-ability.sqlite");
+const databasePath = process.env.DATABASE_PATH || join(process.cwd(), "data", "music-ability.sqlite");
 mkdirSync(dirname(databasePath), { recursive: true });
 
 const database = new DatabaseSync(databasePath);
@@ -39,6 +39,20 @@ database.exec(`
     fetched_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS album_ratings (
+    user_id TEXT NOT NULL,
+    album_key TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    album TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 10),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, album_key),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS album_ratings_by_album ON album_ratings (album_key);
 
   CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,4 +154,46 @@ export function getLatestScores() {
     SELECT score FROM analysis_snapshots AS s
     WHERE created_at = (SELECT MAX(created_at) FROM analysis_snapshots WHERE user_id = s.user_id)
   `).all().map((row) => row.score);
+}
+
+// One rating per user and album; rating again replaces the earlier one.
+export function saveAlbumRating({ userId, key, artist, album, rating }) {
+  const now = new Date().toISOString();
+  database.prepare(`
+    INSERT INTO album_ratings (user_id, album_key, artist, album, rating, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, album_key) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at
+  `).run(userId, key, artist, album, rating, now, now);
+}
+
+export function deleteAlbumRating({ userId, key }) {
+  database.prepare("DELETE FROM album_ratings WHERE user_id = ? AND album_key = ?").run(userId, key);
+}
+
+export function getUserRatings(userId, keys) {
+  const ratings = new Map();
+  if (!userId || keys.length === 0) return ratings;
+  const statement = database.prepare("SELECT rating FROM album_ratings WHERE user_id = ? AND album_key = ?");
+  for (const key of keys) {
+    const row = statement.get(userId, key);
+    if (row) ratings.set(key, row.rating);
+  }
+  return ratings;
+}
+
+// Average rating and vote count per album from Music Ability users. The
+// requesting user's own ratings are left out so nobody can raise their own
+// score by rating the albums they listen to.
+export function getCommunityRatings(keys, excludeUserId = "") {
+  const stats = new Map();
+  if (keys.length === 0) return stats;
+  const statement = database.prepare(`
+    SELECT AVG(rating) AS average, COUNT(*) AS votes FROM album_ratings
+    WHERE album_key = ? AND user_id != ?
+  `);
+  for (const key of keys) {
+    const row = statement.get(key, excludeUserId || "");
+    if (row?.votes > 0) stats.set(key, { average: row.average, votes: row.votes });
+  }
+  return stats;
 }

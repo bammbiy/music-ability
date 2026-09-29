@@ -16,6 +16,8 @@ const metricInfo = {
   mainstream: { name: "대중성", help: "인기 있는 곡을 많이 들을수록 높아요." }
 };
 
+const state = { analysis: null, ratingsEnabled: false };
+
 const POLL_INTERVAL_MS = 5000;
 const POLL_LIMIT = 60;
 let pollCount = 0;
@@ -25,6 +27,7 @@ const capColors = ["blue", "yellow", "green", "red", "white", "purple", "orange"
 drawVuScale();
 loadAnalysis();
 bindFeedback();
+bindRatings();
 bindMedia();
 loadMedia("new music");
 
@@ -59,6 +62,8 @@ async function pollAnalysis() {
 }
 
 function render(data, { initial }) {
+  state.analysis = data;
+  state.ratingsEnabled = state.ratingsEnabled || Boolean(data.ratingsEnabled);
   document.querySelector("#score").textContent = String(clampPercent(data.score));
   document.querySelector("#listener-label").textContent = data.metrics?.label || "";
   document.querySelector("#summary").textContent = data.summary || "";
@@ -73,6 +78,7 @@ function render(data, { initial }) {
   if (initial) renderChannels(data.buckets || []);
   renderKnobs(data.metrics || {}, data.weights || {}, data.acclaim);
   renderAcclaim(data.acclaim, data.source === "demo");
+  renderRatings(data.listenedAlbums || [], data.source === "demo");
 
   const settling = ["collecting", "updating"].includes(data.acclaim?.status);
   if (settling && !demo && pollCount < POLL_LIMIT) setTimeout(pollAnalysis, POLL_INTERVAL_MS);
@@ -165,7 +171,7 @@ function renderKnobs(metrics, weights, acclaim) {
 }
 
 const CREDIBILITY_LABEL = { high: "높음", medium: "보통", low: "낮음", none: "없음" };
-const BASIS_LABEL = { critic: "평론 기준", audience: "청취자 평점 기준", awards: "수상 기준" };
+const BASIS_LABEL = { critic: "평론 기준", audience: "청취자 평점 기준", members: "Music Ability 사용자 평가 기준", awards: "수상 기준" };
 
 function renderAcclaim(acclaim, isSample) {
   const note = document.querySelector("#acclaim-note");
@@ -212,6 +218,7 @@ function renderAcclaim(acclaim, isSample) {
       ].filter(Boolean).join(" / ");
       const facts = [
         album.audienceVotes ? `청취자 평점 ${Math.round(album.audienceScore)} (${album.audienceVotes}표)` : "",
+        album.communityVotes ? `사용자 평균 ${album.communityAverage}/10 (${album.communityVotes}명)` : "",
         album.sitelinks ? `위키백과 ${album.sitelinks}개 언어` : "",
         Number.isFinite(album.popularity) ? `대중성 ${clampPercent(album.popularity)}` : "",
         album.releaseDate ? `${escapeHtml(String(album.releaseDate).slice(0, 4))}년` : ""
@@ -234,6 +241,71 @@ function renderAcclaim(acclaim, isSample) {
       `;
     })
     .join("");
+}
+
+function renderRatings(albums, isSample) {
+  const note = document.querySelector("#rate-note");
+  const list = document.querySelector("#rate-albums");
+  const enabled = state.ratingsEnabled && !isSample;
+
+  if (isSample) {
+    note.textContent = "예시 결과에서는 평가할 수 없어요. 로그인해서 내 청취 기록을 분석하면 평가할 수 있어요.";
+  } else if (!enabled) {
+    note.textContent = "아래 '분석 개선에 참여하기'에서 참여하면 평가할 수 있어요. 내 평가는 다른 사람의 분석에 근거로 쓰이고, 내 점수에는 반영되지 않아요.";
+  } else {
+    note.textContent = "10점 만점으로 평가해 주세요. 내 평가는 다른 사람의 분석에 근거로 쓰이고, 내 점수에는 반영되지 않아요. 언제든 바꾸거나 지울 수 있어요.";
+  }
+
+  const options = (selected) => [
+    `<option value="">평가 안 함</option>`,
+    ...Array.from({ length: 10 }, (_, index) => 10 - index).map((value) => `<option value="${value}"${selected === value ? " selected" : ""}>${value}점</option>`)
+  ].join("");
+
+  list.innerHTML = albums
+    .map((album, index) => `
+      <li>
+        <div>
+          <strong>${escapeHtml(album.album)}</strong>
+          <small>${escapeHtml(album.artist)}${album.communityVotes ? `, 사용자 평균 ${escapeHtml(album.communityAverage)}/10 (${album.communityVotes}명)` : ""}</small>
+        </div>
+        <label class="sr-only" for="rate-${index}">${escapeHtml(album.album)} 평가</label>
+        <select id="rate-${index}" data-key="${escapeHtml(album.key)}"${enabled ? "" : " disabled"}>${options(album.myRating)}</select>
+        <small class="rate-status" role="status"></small>
+      </li>
+    `)
+    .join("");
+}
+
+function bindRatings() {
+  const list = document.querySelector("#rate-albums");
+  if (!list) return;
+  list.addEventListener("change", async (event) => {
+    const select = event.target.closest("select[data-key]");
+    if (!select) return;
+    const status = select.parentElement.querySelector(".rate-status");
+    const rating = select.value ? Number(select.value) : null;
+    select.disabled = true;
+    try {
+      const response = await fetch("/api/ratings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: select.dataset.key, rating })
+      });
+      if (response.ok) {
+        status.textContent = rating ? "저장했어요." : "평가를 지웠어요.";
+      } else if (response.status === 403) {
+        status.textContent = "먼저 '분석 개선에 참여하기'를 눌러 주세요.";
+      } else if (response.status === 409) {
+        status.textContent = "분석이 만료됐어요. 페이지를 새로고침한 뒤 다시 평가해 주세요.";
+      } else {
+        status.textContent = "저장하지 못했어요. 잠시 뒤 다시 골라 주세요.";
+      }
+    } catch {
+      status.textContent = "저장하지 못했어요. 잠시 뒤 다시 골라 주세요.";
+    } finally {
+      select.disabled = false;
+    }
+  });
 }
 
 function renderTags(genres) {
@@ -289,6 +361,8 @@ function bindFeedback() {
     }
     consentButton.textContent = "참여 중";
     consentButton.disabled = true;
+    state.ratingsEnabled = true;
+    if (state.analysis) renderRatings(state.analysis.listenedAlbums || [], state.analysis.source === "demo");
     status.textContent = "참여했어요. 다음 분석부터 점수와 장르 비중이 익명으로 저장돼요.";
   });
 
