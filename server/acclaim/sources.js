@@ -119,7 +119,7 @@ export function createSources({ contact, discogsToken, lastfmKey } = {}) {
       const groups = [];
       for (let page = 0; page < MAX_BROWSE_PAGES; page += 1) {
         const data = await getJson(
-          `https://musicbrainz.org/ws/2/release-group?fmt=json&limit=100&offset=${page * 100}&type=album|ep|single&artist=${found.id}`,
+          `https://musicbrainz.org/ws/2/release-group?fmt=json&inc=aliases&limit=100&offset=${page * 100}&type=album|ep|single&artist=${found.id}`,
           { source: "musicbrainz" }
         );
         const batch = data?.["release-groups"] || [];

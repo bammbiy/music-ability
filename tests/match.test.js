@@ -73,3 +73,21 @@ test("edition notes and dash descriptors do not block a match", () => {
   const groups = [{ id: "arm", title: "Armageddon", "primary-type": "Album" }, { id: "sp", title: "Supernova", "primary-type": "Single" }];
   assert.equal(bestTitleMatch(groups, "Armageddon - The 1st Album", ["aespa"]).id, "arm");
 });
+
+test("titles in another language match through release-group aliases", () => {
+  const groups = [
+    { id: "p1", title: "화양연화 pt.1", "primary-type": "EP", aliases: [{ name: "The Most Beautiful Moment in Life, Part 1" }] },
+    { id: "p2", title: "화양연화 pt.2", "primary-type": "EP", aliases: [{ name: "The Most Beautiful Moment In Life, Pt. 2" }, { name: "The Most Beautiful Moment in Life, Part 2" }] },
+    { id: "yf", title: "화양연화 Young Forever", "primary-type": "Album", "secondary-types": ["Compilation"], aliases: [{ name: "The Most Beautiful Moment in Life: Young Forever" }] }
+  ];
+  assert.equal(bestTitleMatch(groups, "The Most Beautiful Moment in Life, Pt.1", ["BTS"]).id, "p1");
+  assert.equal(bestTitleMatch(groups, "The Most Beautiful Moment in Life, Pt. 2", ["BTS"]).id, "p2");
+  assert.equal(bestTitleMatch(groups, "화양연화 Young Forever", ["BTS"]).id, "yf");
+  assert.equal(bestTitleMatch(groups, "The Most Beautiful Moment in Life", ["BTS"]), null, "ambiguous without a part number");
+});
+
+test("part and volume numbers share one form", () => {
+  assert.equal(canonicalOrdinals("songs pt 1"), "songs part 1");
+  assert.equal(canonicalOrdinals("songs pt1"), "songs part 1");
+  assert.equal(canonicalOrdinals("songs vol 2"), "songs volume 2");
+});

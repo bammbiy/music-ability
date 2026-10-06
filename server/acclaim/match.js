@@ -18,10 +18,13 @@ export function foldText(value) {
   return normalizeKey(String(value || "").normalize("NFKD").replace(/(\p{Script=Latin})\p{M}+/gu, "$1"));
 }
 
-// Canonical ordinal album names: "1st Album", "The 1st Full Album", "정규 1집" -> "album 1";
+// Canonical ordinal album names and part numbers:
+// "Pt. 1", "pt.1", "Part 1" -> "part 1"; "Vol. 2" -> "volume 2"; "1st Album", "The 1st Full Album", "정규 1집" -> "album 1";
 // "2nd Mini Album", "미니 2집" -> "mini album 2".
 export function canonicalOrdinals(text) {
   return text
+    .replace(/\bpt\s*(\d+)\b/g, "part $1")
+    .replace(/\bvol\s*(\d+)\b/g, "volume $1")
     .replace(/\b(\d+)(st|nd|rd|th)\b/g, "$1")
     .replace(/정규\s*/g, "")
     .replace(/\b(the|full|studio|regular)\b/g, " ")
@@ -95,8 +98,12 @@ export function bestTitleMatch(groups, album, artistNames = []) {
   const wants = titleVariants(album).map((variant) => comparableTitle(variant, artistNames));
   const scored = groups
     .map((group) => {
-      const title = comparableTitle(group.title, artistNames);
-      return { group, score: Math.max(...wants.map((want) => titleSimilarity(want, title))) };
+      // MusicBrainz aliases carry titles in other languages
+      // ("화양연화 pt.1" -> "The Most Beautiful Moment in Life, Part 1").
+      const titles = [group.title, ...(group.aliases || []).map((alias) => alias.name)]
+        .filter(Boolean)
+        .map((title) => comparableTitle(title, artistNames));
+      return { group, score: Math.max(...titles.flatMap((title) => wants.map((want) => titleSimilarity(want, title)))) };
     })
     .filter((entry) => entry.score >= MIN_SIMILARITY)
     .sort((a, b) => b.score - a.score || typeRank(a.group) - typeRank(b.group));
