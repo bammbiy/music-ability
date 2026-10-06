@@ -64,6 +64,7 @@ async function pollAnalysis() {
 function render(data, { initial }) {
   state.analysis = data;
   state.ratingsEnabled = state.ratingsEnabled || Boolean(data.ratingsEnabled);
+  if (data.ratingsEnabled) showConsented();
   document.querySelector("#score").textContent = String(clampPercent(data.score));
   document.querySelector("#listener-label").textContent = data.metrics?.label || "";
   document.querySelector("#summary").textContent = data.summary || "";
@@ -359,8 +360,7 @@ function bindFeedback() {
       status.textContent = "Spotify나 Apple Music으로 로그인한 뒤에 참여할 수 있어요.";
       return;
     }
-    consentButton.textContent = "참여 중";
-    consentButton.disabled = true;
+    showConsented();
     state.ratingsEnabled = true;
     if (state.analysis) renderRatings(state.analysis.listenedAlbums || [], state.analysis.source === "demo");
     status.textContent = "참여했어요. 다음 분석부터 점수와 장르 비중이 익명으로 저장돼요.";
@@ -376,6 +376,13 @@ function bindFeedback() {
     });
     status.textContent = response.ok ? "평가를 보냈어요." : "평가를 보내려면 먼저 참여하기를 눌러 주세요.";
   });
+}
+
+function showConsented() {
+  const consentButton = document.querySelector("#consent-button");
+  if (!consentButton) return;
+  consentButton.textContent = "참여 중";
+  consentButton.disabled = true;
 }
 
 function bindMedia() {

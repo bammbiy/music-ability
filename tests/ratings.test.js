@@ -73,3 +73,13 @@ test("albums without open data still get a summary from user ratings", () => {
   const forRater = service.lookup([{ artist: "Hyukoh", album: "23" }], { excludeUserId: "m1" });
   assert.equal(forRater.summaries.get("hyukoh::23").communityVotes, 2);
 });
+
+test("user ratings count even before open data is collected or when collection is off", () => {
+  const service = createAcclaimService({ enabled: false });
+  for (const user of ["n1", "n2"]) {
+    consent(user);
+    store.saveAlbumRating({ userId: user, key: "fresh::album", artist: "Fresh", album: "Album", rating: 8 });
+  }
+  const result = service.lookup([{ artist: "Fresh", album: "Album" }]);
+  assert.equal(result.summaries.get("fresh::album").communityVotes, 2);
+});

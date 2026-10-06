@@ -49,10 +49,13 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
       const members = community.get(key) || null;
       if (hit?.status === "ok") {
         summaries.set(key, summarizeAlbum(hit.record, currentCalibration(), members));
-      } else if (members && hit) {
-        // No open data for this album, but Music Ability users rated it.
+        continue;
+      }
+      // No open data (yet, or at all), but Music Ability users rated it.
+      if (members) {
         summaries.set(key, summarizeAlbum({ ...item, critics: [], sources: ["members"] }, currentCalibration(), members));
-      } else if (hit?.status === "error") {
+      }
+      if (hit?.status === "error") {
         failed += 1;
       } else if (hit) {
         notFound += 1;

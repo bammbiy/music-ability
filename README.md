@@ -152,7 +152,7 @@ Spotify Public Web API는 전체 청취 시간 기록을 직접 제공하지 않
 - Apple MusicKit on the Web + Apple Music API
 - Vanilla HTML, CSS, JavaScript
 - MusicBrainz, Wikidata, Discogs, Last.fm (평단/청취자 평가)
-- 테스트: `npm test` (Node 내장 test runner)
+- 테스트: `npm test` (Node 내장 test runner). `tests/flow.test.js`는 실제 서버를 가짜 Spotify에 연결해 로그인부터 연결 해제까지 전체 흐름을 검증합니다(`SPOTIFY_ACCOUNTS_URL`, `SPOTIFY_API_URL`은 이 테스트용 설정).
 
 ## Quality Data
 
@@ -171,6 +171,7 @@ Spotify Public Web API는 전체 청취 시간 기록을 직접 제공하지 않
 - 가중치는 다른 청취자 평점과 같이 투표 수에 비례하므로(20명에 0.75, 최대 1.5), 소수의 평가는 결과를 크게 움직이지 못합니다.
 - 공개 데이터가 없는 앨범(예: 한국 인디)도 사용자 평가만으로 근거를 가질 수 있습니다.
 - 저장 항목: 해시된 사용자 ID, 앨범 키, 아티스트/앨범 이름, 점수. 연결 해제 시 함께 삭제됩니다.
+- 참여 동의는 DB에 저장되므로 다시 로그인해도 유지됩니다(연결 해제 전까지). Apple Music은 로그인마다 사용자 토큰이 바뀌어 같은 사람으로 인식되지 않을 수 있습니다.
 - `POST /api/account/disconnect`: 연결 해제 및 저장 데이터 삭제
 
 현재 SQLite 파일은 `data/music-ability.sqlite`에 생성되며 Git에는 포함되지 않습니다. 공개 서비스에서는 이 저장소를 관리형 PostgreSQL로 교체하고, 개인정보처리방침과 관리자용 데이터 보존 정책을 추가해야 합니다.

@@ -197,3 +197,9 @@ export function getCommunityRatings(keys, excludeUserId = "") {
   }
   return stats;
 }
+
+// Consent survives logouts: it lives in the users table, not only in the session.
+export function hasConsent(userId) {
+  if (!userId) return false;
+  return Boolean(database.prepare("SELECT 1 FROM users WHERE user_id = ?").get(userId));
+}

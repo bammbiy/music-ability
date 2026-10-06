@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteAlbumRating, deleteUserData, getAlbumCacheStats, getLatestScores, getUserRatings, saveAlbumRating, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
+import { deleteAlbumRating, deleteUserData, getAlbumCacheStats, getLatestScores, getUserRatings, hasConsent, saveAlbumRating, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
 import { albumKey } from "./acclaim/score.js";
 import { buildAnalysis } from "./analysis.js";
 import { createAcclaimService } from "./acclaim/index.js";
@@ -20,6 +20,9 @@ const PORT = Number(process.env.PORT || 3003);
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || "";
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || "";
 const SPOTIFY_REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || `http://localhost:${PORT}/callback`;
+// Overridable only so integration tests can point at a local fake Spotify.
+const SPOTIFY_ACCOUNTS_URL = process.env.SPOTIFY_ACCOUNTS_URL || "https://accounts.spotify.com";
+const SPOTIFY_API_URL = process.env.SPOTIFY_API_URL || "https://api.spotify.com";
 const APPLE_MUSICKIT_DEVELOPER_TOKEN = process.env.APPLE_MUSICKIT_DEVELOPER_TOKEN || "";
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "";
 const NEWS_RSS_URLS = parseList(process.env.NEWS_RSS_URLS);
@@ -190,7 +193,7 @@ async function handleLogin(req, res) {
   const state = randomBytes(16).toString("hex");
   sessions.get(sessionId).state = state;
 
-  const authUrl = new URL("https://accounts.spotify.com/authorize");
+  const authUrl = new URL(`${SPOTIFY_ACCOUNTS_URL}/authorize`);
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("client_id", SPOTIFY_CLIENT_ID);
   authUrl.searchParams.set("scope", spotifyScopes.join(" "));
@@ -218,7 +221,7 @@ async function handleCallback(req, res, url) {
     redirect_uri: SPOTIFY_REDIRECT_URI
   });
 
-  const tokenResponse = await fetch("https://accounts.spotify.com/api/token", {
+  const tokenResponse = await fetch(`${SPOTIFY_ACCOUNTS_URL}/api/token`, {
     method: "POST",
     signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
     headers: {
@@ -234,7 +237,7 @@ async function handleCallback(req, res, url) {
   }
 
   const token = await tokenResponse.json();
-  const profileResponse = await fetch("https://api.spotify.com/v1/me", {
+  const profileResponse = await fetch(`${SPOTIFY_API_URL}/v1/me`, {
     headers: { Authorization: `Bearer ${token.access_token}` },
     signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS)
   });
@@ -243,13 +246,15 @@ async function handleCallback(req, res, url) {
 
   // Issue a fresh session id after login so a pre-login cookie cannot be reused (session fixation).
   sessions.delete(session.id);
+  const userId = providerAccount ? hashProviderAccount("spotify", providerAccount) : null;
   createSession(res, {
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + token.expires_in * 1000,
-    userId: providerAccount ? hashProviderAccount("spotify", providerAccount) : null,
+    userId,
     provider: "spotify",
-    analysisConsent: false
+    // Returning users who consented before stay opted in.
+    analysisConsent: hasConsent(userId)
   });
 
   redirect(res, "/dashboard.html");
@@ -261,7 +266,7 @@ async function handleMe(req, res) {
     return sendJson(res, { authenticated: false });
   }
 
-  const profile = await spotifyGet(session, "https://api.spotify.com/v1/me");
+  const profile = await spotifyGet(session, `${SPOTIFY_API_URL}/v1/me`);
   return sendJson(res, {
     authenticated: true,
     profile: {
@@ -292,9 +297,9 @@ async function handleAnalysis(req, res, url) {
   }
 
   const [topArtists, topTracks, recentTracks] = await Promise.all([
-    spotifyGet(session, "https://api.spotify.com/v1/me/top/artists?limit=30&time_range=medium_term"),
-    spotifyGet(session, "https://api.spotify.com/v1/me/top/tracks?limit=30&time_range=medium_term"),
-    spotifyGet(session, "https://api.spotify.com/v1/me/player/recently-played?limit=30")
+    spotifyGet(session, `${SPOTIFY_API_URL}/v1/me/top/artists?limit=30&time_range=medium_term`),
+    spotifyGet(session, `${SPOTIFY_API_URL}/v1/me/top/tracks?limit=30&time_range=medium_term`),
+    spotifyGet(session, `${SPOTIFY_API_URL}/v1/me/player/recently-played?limit=30`)
   ]);
 
   const artistById = new Map();
@@ -393,7 +398,7 @@ async function handleAppleAnalysis(req, res) {
   if (sessionData.userId !== appleUserId) {
     // Consent is tied to one provider account; never carry it over to a different one.
     sessionData.userId = appleUserId;
-    sessionData.analysisConsent = false;
+    sessionData.analysisConsent = hasConsent(appleUserId);
   }
   sessionData.provider = "apple";
 
@@ -623,7 +628,7 @@ async function hydrateArtistGenres(session, artistById, missingArtists) {
   for (let i = 0; i < ids.length; i += 50) {
     const chunk = ids.slice(i, i + 50);
     if (chunk.length === 0) continue;
-    const data = await spotifyGet(session, `https://api.spotify.com/v1/artists?ids=${chunk.join(",")}`);
+    const data = await spotifyGet(session, `${SPOTIFY_API_URL}/v1/artists?ids=${chunk.join(",")}`);
     for (const artist of data.artists || []) {
       artistById.set(artist.id, normalizeArtist(artist));
     }
@@ -653,7 +658,7 @@ async function ensureFreshSpotifyToken(session) {
   if (!session.refreshToken) throw new HttpError(401, "spotify_reauth_required");
 
   session.refreshing ||= (async () => {
-    const response = await fetch("https://accounts.spotify.com/api/token", {
+    const response = await fetch(`${SPOTIFY_ACCOUNTS_URL}/api/token`, {
       method: "POST",
       signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
       headers: {
