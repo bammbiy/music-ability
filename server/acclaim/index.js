@@ -29,6 +29,9 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
     }
 
     const summaries = new Map();
+    // Keys whose open-data lookup is finished (found or not), so a missing or
+    // thin summary means the evidence really is thin, not still on its way.
+    const settled = new Set();
     let pending = 0;
     let notFound = 0;
     let failed = 0;
@@ -38,8 +41,9 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
         const record = sampleRecords.get(key);
         if (record) summaries.set(key, summarizeAlbum(record, currentCalibration()));
         else notFound += 1;
+        settled.add(key);
       }
-      return { summaries, pending, notFound, failed, total: wanted.size, enabled: true };
+      return { summaries, settled, pending, notFound, failed, total: wanted.size, enabled: true };
     }
 
     const cached = getAlbumScores([...wanted.keys()]);
@@ -47,6 +51,7 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
     for (const [key, item] of wanted) {
       const hit = cached.get(key);
       const members = community.get(key) || null;
+      if ((hit && hit.status !== "error") || !enabled) settled.add(key);
       if (hit?.status === "ok") {
         summaries.set(key, summarizeAlbum(hit.record, currentCalibration(), members));
         continue;
@@ -65,7 +70,7 @@ export function createAcclaimService({ enabled = true, contact, discogsToken, la
       }
     }
 
-    return { summaries, pending, notFound, failed, total: wanted.size, enabled };
+    return { summaries, settled, pending, notFound, failed, total: wanted.size, enabled };
   }
 
   function enqueue(item) {

@@ -34,6 +34,12 @@ const tracks = [
   track("t4", "Karma Police", artists[0], "OK Computer", "1997-05-21", 74)
 ];
 
+const appleSongs = [
+  { id: "a1", type: "songs", attributes: { name: "Bad Guy", artistName: "Billie Eilish", albumName: "When We All Fall Asleep, Where Do We Go?", genreNames: ["Alternative"], releaseDate: "2019-03-29" } },
+  { id: "a2", type: "songs", attributes: { name: "Hype Boy", artistName: "NewJeans", albumName: "New Jeans", genreNames: ["K-Pop"], releaseDate: "2022-08-01" } }
+];
+
+// Also serves the Apple Music "recently played" endpoint.
 function startFakeSpotify() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://fake");
@@ -43,6 +49,11 @@ function startFakeSpotify() {
     };
     let body = "";
     for await (const chunk of req) body += chunk;
+
+    if (url.pathname === "/v1/me/recent/played/tracks") {
+      if (req.headers.authorization !== "Bearer apple-developer" || !req.headers["music-user-token"]) return send({ errors: [] }, 403);
+      return send({ data: appleSongs });
+    }
 
     if (url.pathname === "/api/token") {
       const form = new URLSearchParams(body);
@@ -100,6 +111,8 @@ test.before(async () => {
       SPOTIFY_REDIRECT_URI: `${base}/callback`,
       SPOTIFY_ACCOUNTS_URL: spotifyUrl,
       SPOTIFY_API_URL: spotifyUrl,
+      APPLE_API_URL: spotifyUrl,
+      APPLE_MUSICKIT_DEVELOPER_TOKEN: "apple-developer",
       SESSION_SECRET: "x".repeat(40),
       DATABASE_PATH: join(dir, "flow.sqlite"),
       ACCLAIM_ENABLED: "0",
@@ -128,25 +141,34 @@ test.after(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-// A tiny browser: one cookie, Origin on POSTs, no automatic redirects.
+// A tiny browser: a cookie jar, Origin on POSTs, no automatic redirects.
+// `cookie` reads and replaces the session cookie only.
 function browser() {
-  let cookie = "";
+  const jar = new Map();
   return {
-    get cookie() { return cookie; },
-    set cookie(value) { cookie = value; },
+    jar,
+    get cookie() { return jar.has("ma_session") ? `ma_session=${jar.get("ma_session")}` : ""; },
+    set cookie(value) {
+      if (value) jar.set("ma_session", value.replace(/^ma_session=/, ""));
+      else jar.delete("ma_session");
+    },
     async request(path, { method = "GET", json } = {}) {
       const response = await fetch(`${base}${path}`, {
         method,
         redirect: "manual",
         headers: {
-          ...(cookie ? { Cookie: cookie } : {}),
+          ...(jar.size ? { Cookie: [...jar].map(([name, value]) => `${name}=${value}`).join("; ") } : {}),
           ...(method === "POST" ? { Origin: base } : {}),
           ...(json !== undefined ? { "Content-Type": "application/json" } : {})
         },
         body: json !== undefined ? JSON.stringify(json) : undefined
       });
-      const setCookie = response.headers.get("set-cookie");
-      if (setCookie) cookie = setCookie.split(";")[0];
+      for (const header of response.headers.getSetCookie()) {
+        const [pair, ...attributes] = header.split(";");
+        const [name, value] = pair.split("=");
+        if (!value || attributes.some((attribute) => attribute.trim() === "Max-Age=0")) jar.delete(name.trim());
+        else jar.set(name.trim(), value);
+      }
       const type = response.headers.get("content-type") || "";
       const data = type.includes("json") ? await response.json() : await response.text();
       return { status: response.status, location: response.headers.get("location"), data };
@@ -156,10 +178,10 @@ function browser() {
       assert.equal(start.status, 302);
       const state = new URL(start.location).searchParams.get("state");
       assert.ok(state, "login redirects to Spotify with a state value");
-      const preLoginCookie = cookie;
+      const preLoginCookie = this.cookie;
       const callback = await this.request(`/callback?code=${code}&state=${state}`);
       assert.equal(callback.location, "/dashboard.html");
-      assert.notEqual(cookie, preLoginCookie, "session id is rotated after login");
+      assert.notEqual(this.cookie, preLoginCookie, "session id is rotated after login");
       return preLoginCookie;
     }
   };
@@ -183,6 +205,7 @@ test("full flow: login, analysis, consent, ratings, re-login, disconnect", async
   assert.ok(analysis.score > 0);
   assert.equal(analysis.acclaim.status, "unavailable");
   assert.deepEqual(analysis.listenedAlbums.map((album) => album.album), ["OK Computer", "Palette", "22"]);
+  assert.ok(analysis.listenedAlbums.every((album) => album.needsRatings), "with collection off, albums without user ratings ask for ratings");
   assert.equal(analysis.ratingsEnabled, false);
 
   const okKey = analysis.listenedAlbums[0].key;
@@ -191,6 +214,11 @@ test("full flow: login, analysis, consent, ratings, re-login, disconnect", async
   assert.equal((await alice.request("/api/consent", { method: "POST" })).status, 200);
   analysis = (await alice.request("/api/analysis?cached=1")).data;
   assert.equal(analysis.ratingsEnabled, true);
+
+  // "Does the score feel right?" is stored together with the result it rates.
+  const feel = await alice.request("/api/feedback", { method: "POST", json: { targetType: "score", targetId: "score-v1", rating: 2 } });
+  assert.deepEqual([feel.status, feel.data.linked], [200, true]);
+  assert.equal((await alice.request("/api/feedback", { method: "POST", json: { targetType: "score", targetId: "score-v1", rating: 6 } })).status, 400);
 
   assert.equal((await alice.request("/api/ratings", { method: "POST", json: { key: okKey, rating: 9 } })).status, 200);
   assert.equal((await alice.request("/api/ratings", { method: "POST", json: { key: okKey, rating: 11 } })).status, 400);
@@ -228,6 +256,37 @@ test("full flow: login, analysis, consent, ratings, re-login, disconnect", async
   const aliceReturns = browser();
   await aliceReturns.login("alice");
   assert.equal((await aliceReturns.request("/api/analysis")).data.ratingsEnabled, false, "consent is gone after disconnect");
+});
+
+test("Apple Music consent survives a renewed token and a new session in the same browser", async () => {
+  const dana = browser();
+  const first = await dana.request("/api/apple/analysis", { method: "POST", json: { musicUserToken: "music-token-1" } });
+  assert.equal(first.status, 200);
+  assert.equal(first.data.source, "apple");
+  assert.equal(first.data.ratingsEnabled, false);
+  assert.ok(dana.jar.has("ma_apple"), "the browser gets a long-lived Apple id");
+  assert.equal((await dana.request("/api/consent", { method: "POST" })).status, 200);
+  const albumKey = first.data.listenedAlbums[0].key;
+  assert.equal((await dana.request("/api/ratings", { method: "POST", json: { key: albumKey, rating: 8 } })).status, 200);
+
+  // The session ends and MusicKit hands out a new token.
+  dana.cookie = "";
+  const again = await dana.request("/api/apple/analysis", { method: "POST", json: { musicUserToken: "music-token-2" } });
+  assert.equal(again.data.ratingsEnabled, true);
+  assert.equal(again.data.listenedAlbums.find((album) => album.key === albumKey).myRating, 8);
+
+  // A forged Apple id is ignored and replaced.
+  const eve = browser();
+  eve.jar.set("ma_apple", `${dana.jar.get("ma_apple").split(".")[0]}.forged`);
+  const forged = await eve.request("/api/apple/analysis", { method: "POST", json: { musicUserToken: "music-token-3" } });
+  assert.equal(forged.data.ratingsEnabled, false);
+  assert.notEqual(eve.jar.get("ma_apple"), dana.jar.get("ma_apple"));
+
+  // Disconnecting deletes the data and the Apple id.
+  assert.equal((await dana.request("/api/account/disconnect", { method: "POST" })).data.deleted, true);
+  assert.equal(dana.jar.has("ma_apple"), false);
+  const after = await dana.request("/api/apple/analysis", { method: "POST", json: { musicUserToken: "music-token-2" } });
+  assert.equal(after.data.ratingsEnabled, false);
 });
 
 test("expiring Spotify tokens are refreshed", async () => {

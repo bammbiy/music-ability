@@ -345,13 +345,17 @@ export function listenedAlbums(tracks, acclaim = null) {
     const key = albumKey(artist, track.album);
     if (!key || albums.has(key)) continue;
     const summary = acclaim?.summaries?.get(key);
+    const confidence = summary?.confidence ?? 0;
     albums.set(key, {
       key,
       artist,
       album: track.album,
       image: track.image || null,
       communityAverage: summary?.communityAverage ?? null,
-      communityVotes: summary?.communityVotes ?? 0
+      communityVotes: summary?.communityVotes ?? 0,
+      confidence: Math.round(confidence * 100) / 100,
+      // Little or no public evidence: user ratings help most here.
+      needsRatings: Boolean(acclaim?.settled?.has(key)) && confidence < RELIABLE_ALBUM_CONFIDENCE
     });
     if (albums.size >= MAX_LISTED_ALBUMS) break;
   }

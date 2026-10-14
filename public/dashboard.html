@@ -109,14 +109,27 @@
         <div class="feedback-actions">
           <button class="plate-button primary" id="consent-button" type="button">참여하기</button>
           <form id="feedback-form" class="feedback-form">
-            <label for="rating">이번 분석이 내 취향과 얼마나 맞나요?</label>
-            <select id="rating" name="rating">
-              <option value="5">5점, 매우 잘 맞아요</option>
-              <option value="4">4점, 잘 맞아요</option>
-              <option value="3">3점, 보통이에요</option>
-              <option value="2">2점, 조금 달라요</option>
-              <option value="1">1점, 전혀 달라요</option>
-            </select>
+            <div class="feedback-field">
+              <label for="rating">이번 분석이 내 취향과 얼마나 맞나요?</label>
+              <select id="rating" name="rating">
+                <option value="5">5점, 매우 잘 맞아요</option>
+                <option value="4">4점, 잘 맞아요</option>
+                <option value="3">3점, 보통이에요</option>
+                <option value="2">2점, 조금 달라요</option>
+                <option value="1">1점, 전혀 달라요</option>
+              </select>
+            </div>
+            <div class="feedback-field">
+              <label for="score-feel">점수는 어떻게 느껴지나요?</label>
+              <select id="score-feel" name="scoreFeel">
+                <option value="">답하지 않을래요</option>
+                <option value="1">너무 낮아요</option>
+                <option value="2">조금 낮아요</option>
+                <option value="3">적당해요</option>
+                <option value="4">조금 높아요</option>
+                <option value="5">너무 높아요</option>
+              </select>
+            </div>
             <button class="plate-button" type="submit">평가 보내기</button>
           </form>
         </div>

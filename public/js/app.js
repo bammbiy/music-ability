@@ -255,6 +255,9 @@ function renderRatings(albums, isSample) {
     note.textContent = "아래 '분석 개선에 참여하기'에서 참여하면 평가할 수 있어요. 내 평가는 다른 사람의 분석에 근거로 쓰이고, 내 점수에는 반영되지 않아요.";
   } else {
     note.textContent = "10점 만점으로 평가해 주세요. 내 평가는 다른 사람의 분석에 근거로 쓰이고, 내 점수에는 반영되지 않아요. 언제든 바꾸거나 지울 수 있어요.";
+    if (albums.some((album) => album.needsRatings)) {
+      note.textContent += " '공개 평가 적음' 앨범은 공개된 평론과 평점이 적어서 내 평가가 특히 도움이 돼요.";
+    }
   }
 
   const options = (selected) => [
@@ -262,11 +265,14 @@ function renderRatings(albums, isSample) {
     ...Array.from({ length: 10 }, (_, index) => 10 - index).map((value) => `<option value="${value}"${selected === value ? " selected" : ""}>${value}점</option>`)
   ].join("");
 
-  list.innerHTML = albums
+  // Albums with little public evidence come first: a rating helps them most.
+  const ordered = [...albums].sort((a, b) => Number(Boolean(b.needsRatings)) - Number(Boolean(a.needsRatings)));
+  list.innerHTML = ordered
     .map((album, index) => `
       <li>
         <div>
           <strong>${escapeHtml(album.album)}</strong>
+          ${album.needsRatings ? `<span class="rate-hint" title="공개된 평론·평점이 적은 앨범이에요. 내 평가가 다른 사람의 분석에 특히 도움이 돼요.">공개 평가 적음, 평가 환영</span>` : ""}
           <small>${escapeHtml(album.artist)}${album.communityVotes ? `, 사용자 평균 ${escapeHtml(album.communityAverage)}/10 (${album.communityVotes}명)` : ""}</small>
         </div>
         <label class="sr-only" for="rate-${index}">${escapeHtml(album.album)} 평가</label>
@@ -368,13 +374,22 @@ function bindFeedback() {
 
   feedbackForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const rating = Number(new FormData(feedbackForm).get("rating"));
-    const response = await fetch("/api/feedback", {
+    const form = new FormData(feedbackForm);
+    const send = (targetType, targetId, rating) => fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetType: "analysis", targetId: "analysis-v1", rating })
+      body: JSON.stringify({ targetType, targetId, rating })
     });
-    status.textContent = response.ok ? "평가를 보냈어요." : "평가를 보내려면 먼저 참여하기를 눌러 주세요.";
+    try {
+      const responses = [await send("analysis", "analysis-v1", Number(form.get("rating")))];
+      // How the score feels is used to tune the score weights later.
+      if (form.get("scoreFeel")) responses.push(await send("score", "score-v1", Number(form.get("scoreFeel"))));
+      if (responses.every((response) => response.ok)) status.textContent = "평가를 보냈어요. 고마워요.";
+      else if (responses.some((response) => response.status === 403)) status.textContent = "평가를 보내려면 먼저 참여하기를 눌러 주세요.";
+      else status.textContent = "평가를 보내지 못했어요. 잠시 뒤 다시 보내 주세요.";
+    } catch {
+      status.textContent = "평가를 보내지 못했어요. 잠시 뒤 다시 보내 주세요.";
+    }
   });
 }
 

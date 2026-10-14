@@ -92,3 +92,16 @@ test("thin evidence shrinks the acclaim share of the score", () => {
   assert.equal(strongResult.acclaim.credibility === "high" || strongResult.acclaim.credibility === "medium", true);
   assert.ok(strongResult.acclaim.evidence.criticReviews >= 9);
 });
+
+test("albums with settled but thin evidence are flagged for ratings", () => {
+  const strong = [{ artist: "Quiet Band", album: "Loved", critics: [{ source: "metacritic", score: 90 }, { source: "pitchfork", score: 9 }, { source: "allmusic", score: 4.5 }], musicbrainz: { rating: 85, votes: 400 } }];
+  const keys = tracks.map((track) => albumKey(track.artists[0].name, track.album));
+  // "Hit" is still being collected, so it is not flagged yet.
+  const settled = new Set(keys.filter((key) => key !== albumKey("Star", "Hit")));
+  const albums = buildAnalysis({ tracks, artists: [], generatedAt: "2024-06-01T00:00:00Z" }, { acclaim: acclaimFor(strong, { settled }) }).listenedAlbums;
+  const flag = (album) => albums.find((entry) => entry.album === album).needsRatings;
+  assert.equal(flag("Loved"), false);
+  assert.equal(flag("Hit"), false);
+  assert.equal(flag("Middle"), true);
+  assert.equal(flag("Unknown"), true);
+});

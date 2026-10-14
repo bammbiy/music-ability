@@ -18,6 +18,7 @@ Music Ability analyzes a listener's music taste from Spotify / Apple Music liste
 | `npm run check` | Syntax check of server and browser entry files |
 | `npm test` | All unit tests plus the end-to-end login flow test (`node --test`) |
 | `npm run probe -- "<artist>" "<album>"` | Collect one album from the live APIs and print every source's result, bypassing the cache |
+| `npm run learn-weights` | Suggest `SCORE_WEIGHTS` from "does the score feel right?" feedback (needs 50+ answers; prints only) |
 
 Config lives in `.env` (see `.env.example`). Never commit `.env` or `data/`.
 
@@ -27,6 +28,7 @@ Config lives in `.env` (see `.env.example`). Never commit `.env` or `data/`.
 server/
   app.js            HTTP server, routing, security headers, sessions, Spotify OAuth, Apple Music, media feed, rating/consent APIs
   analysis.js       Pure analysis engine: buildAnalysis(), SCORE_WEIGHTS, acclaim metrics, listened albums
+  learning.js       Pure weight learner from score feedback (suggestions only, never applied automatically)
   store.js          node:sqlite: users (consent), snapshots, feedback, album_scores cache, album_ratings
   demo.js           Demo dataset
   acclaim/
@@ -38,7 +40,7 @@ server/
     sample-albums.json  Clearly labeled sample data for demo mode
 public/             index.html + js/home.js (landing), dashboard.html + js/app.js (dashboard), css/, fonts/ (self-hosted Pretendard)
 tests/              node --test; external APIs are mocked; flow.test.js runs the real server against a fake Spotify
-scripts/            probe-acclaim.mjs
+scripts/            probe-acclaim.mjs, learn-weights.mjs
 ```
 
 Data flow: provider listening data → normalized dataset → `acclaim.lookup()` (cache + community ratings, misses queued for background collection) → `buildAnalysis()` → dashboard. The dashboard polls `/api/analysis?cached=1` while albums are being collected.
@@ -90,6 +92,7 @@ Scoring fairness
 - Popularity or attention alone must never produce a quality score; it only nudges an estimate backed by critics, awards or ratings (`combineEvidence`).
 - A user's own album ratings must never count toward their own analysis (`excludeUserId` in the acclaim lookup); ratings only come from consented users and only for albums in their current listening data.
 - Thin evidence must weigh less (confidence-scaled weights); never inflate a score to hide missing data. Show credibility to the user instead.
+- Score weights change only by a reviewed edit to `SCORE_WEIGHTS`; learned weights are suggestions, not live config.
 - Demo/sample data must be labeled as sample in the UI and never attributed to real outlets.
 
 UI
@@ -100,4 +103,5 @@ UI
 
 - Network hosts needed for acclaim collection: `musicbrainz.org`, `query.wikidata.org`, `en.wikipedia.org`, `api.listenbrainz.org` (optional: `api.discogs.com`, `ws.audioscrobbler.com`).
 - In the Claude Code cloud sandbox, Node's built-in `fetch` only uses the egress proxy with `NODE_USE_ENV_PROXY=1` (Node 22.21+). curl works without it.
-- Integration tests point Spotify at a fake server through `SPOTIFY_ACCOUNTS_URL` / `SPOTIFY_API_URL`; `DATABASE_PATH` selects the SQLite file.
+- Integration tests point Spotify and Apple Music at a fake server through `SPOTIFY_ACCOUNTS_URL` / `SPOTIFY_API_URL` / `APPLE_API_URL`; `DATABASE_PATH` selects the SQLite file.
+- Apple Music users are identified by a signed random per-browser cookie (`ma_apple`), not by the Music User Token, which changes on renewal.

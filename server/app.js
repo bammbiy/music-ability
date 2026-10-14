@@ -24,6 +24,11 @@ const SPOTIFY_REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || `http://localho
 const SPOTIFY_ACCOUNTS_URL = process.env.SPOTIFY_ACCOUNTS_URL || "https://accounts.spotify.com";
 const SPOTIFY_API_URL = process.env.SPOTIFY_API_URL || "https://api.spotify.com";
 const APPLE_MUSICKIT_DEVELOPER_TOKEN = process.env.APPLE_MUSICKIT_DEVELOPER_TOKEN || "";
+const APPLE_API_URL = process.env.APPLE_API_URL || "https://api.music.apple.com";
+// Apple gives no stable account id, and the Music User Token changes when it
+// is renewed. A long-lived random id in a signed cookie keeps consent and
+// ratings for the same browser instead.
+const APPLE_DEVICE_TTL_SECONDS = 365 * 24 * 60 * 60;
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "";
 const NEWS_RSS_URLS = parseList(process.env.NEWS_RSS_URLS);
 const SOCIAL_FEED_URLS = parseList(process.env.SOCIAL_FEED_URLS);
@@ -347,7 +352,7 @@ function analyzeForSession(session, dataset) {
   const settled = !["collecting", "updating"].includes(analysis.acclaim.status);
   // Store one snapshot per dataset, once album scores have settled.
   if (settled && !session.lastDatasetSaved && session.analysisConsent && session.userId) {
-    saveAnalysisSnapshot({ userId: session.userId, provider: dataset.provider, analysis });
+    session.lastSnapshotId = saveAnalysisSnapshot({ userId: session.userId, provider: dataset.provider, analysis });
     session.lastDatasetSaved = true;
   }
   return analysis;
@@ -357,6 +362,7 @@ function rememberDataset(session, dataset) {
   session.lastDataset = dataset;
   session.lastDatasetAt = Date.now();
   session.lastDatasetSaved = false;
+  session.lastSnapshotId = null;
 }
 
 function populationScores() {
@@ -377,7 +383,7 @@ async function handleAppleAnalysis(req, res) {
     return sendJson(res, { error: "music_user_token_required" }, 400);
   }
 
-  const response = await fetch("https://api.music.apple.com/v1/me/recent/played/tracks?limit=30", {
+  const response = await fetch(`${APPLE_API_URL}/v1/me/recent/played/tracks?limit=30`, {
     signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${APPLE_MUSICKIT_DEVELOPER_TOKEN}`,
@@ -394,7 +400,7 @@ async function handleAppleAnalysis(req, res) {
   const dataset = normalizeAppleDataset(appleData);
   const session = getOrCreateSession(req, res);
   const sessionData = sessions.get(session);
-  const appleUserId = hashProviderAccount("apple", musicUserToken);
+  const appleUserId = hashProviderAccount("apple", appleDeviceId(req, res));
   if (sessionData.userId !== appleUserId) {
     // Consent is tied to one provider account; never carry it over to a different one.
     sessionData.userId = appleUserId;
@@ -567,7 +573,8 @@ function handleDisconnect(req, res) {
     if (session.userId) deleteUserData(session.userId);
     sessions.delete(session.id);
   }
-  res.setHeader("Set-Cookie", sessionCookie("", 0));
+  appendCookie(res, sessionCookie("", 0));
+  appendCookie(res, appleDeviceCookie("", 0));
   return sendJson(res, { disconnected: true, deleted: true });
 }
 
@@ -613,14 +620,21 @@ async function handleFeedback(req, res) {
   const targetType = String(payload.targetType || "").trim();
   const targetId = String(payload.targetId || "").trim();
   const rating = Number(payload.rating);
-  const validTypes = new Set(["analysis", "genre", "track"]);
+  // "score": does the score feel too low (1) ... right (3) ... too high (5)?
+  const validTypes = new Set(["analysis", "score", "genre", "track"]);
 
   if (!validTypes.has(targetType) || !targetId || targetId.length > 120 || !Number.isInteger(rating) || rating < 1 || rating > 5) {
     return sendJson(res, { error: "invalid_feedback" }, 400);
   }
 
-  saveFeedback({ userId: session.userId, targetType, targetId, rating });
-  return sendJson(res, { saved: true });
+  // Link the answer to the result it was given for, which weight learning needs.
+  // Consenting after the result was shown means it has not been saved yet.
+  if ((targetType === "analysis" || targetType === "score") && !session.lastSnapshotId && session.lastDataset) {
+    analyzeForSession(session, session.lastDataset);
+  }
+  const snapshotId = targetType === "analysis" || targetType === "score" ? session.lastSnapshotId || null : null;
+  saveFeedback({ userId: session.userId, targetType, targetId, rating, snapshotId });
+  return sendJson(res, { saved: true, linked: Boolean(snapshotId) });
 }
 
 async function hydrateArtistGenres(session, artistById, missingArtists) {
@@ -718,12 +732,32 @@ function createSession(res, data = {}) {
   const now = Date.now();
   const session = { ...data, id: sessionId, createdAt: now, lastSeenAt: now };
   sessions.set(sessionId, session);
-  res.setHeader("Set-Cookie", sessionCookie(`${sessionId}.${signSession(sessionId)}`, SESSION_TTL_MS / 1000));
+  appendCookie(res, sessionCookie(`${sessionId}.${signSession(sessionId)}`, SESSION_TTL_MS / 1000));
   return session;
 }
 
 function sessionCookie(value, maxAgeSeconds) {
   return `ma_session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}${COOKIE_SECURE ? "; Secure" : ""}`;
+}
+
+function appleDeviceCookie(value, maxAgeSeconds) {
+  return `ma_apple=${value}; HttpOnly; SameSite=Lax; Path=/api; Max-Age=${maxAgeSeconds}${COOKIE_SECURE ? "; Secure" : ""}`;
+}
+
+function appendCookie(res, cookie) {
+  res.appendHeader("Set-Cookie", cookie);
+}
+
+// Returns this browser's Apple Music id, issuing one if it has none yet.
+function appleDeviceId(req, res) {
+  const match = (req.headers.cookie || "").match(/(?:^|;\s*)ma_apple=([^;]+)/);
+  if (match) {
+    const [id, signature] = match[1].split(".");
+    if (id && signature && safeEqual(signSession(`apple:${id}`), signature)) return id;
+  }
+  const id = randomBytes(24).toString("hex");
+  appendCookie(res, appleDeviceCookie(`${id}.${signSession(`apple:${id}`)}`, APPLE_DEVICE_TTL_SECONDS));
+  return id;
 }
 
 function getSession(req) {

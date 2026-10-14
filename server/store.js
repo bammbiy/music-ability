@@ -65,6 +65,11 @@ database.exec(`
   );
 `);
 
+// Feedback added before snapshot links existed has no snapshot_id column.
+if (!database.prepare("PRAGMA table_info(feedback)").all().some((column) => column.name === "snapshot_id")) {
+  database.exec("ALTER TABLE feedback ADD COLUMN snapshot_id INTEGER REFERENCES analysis_snapshots(id) ON DELETE SET NULL");
+}
+
 export function saveConsent({ userId, provider, consentedAt }) {
   const statement = database.prepare(`
     INSERT INTO users (user_id, provider, consented_at, created_at, updated_at)
@@ -77,9 +82,10 @@ export function saveConsent({ userId, provider, consentedAt }) {
   statement.run(userId, provider, consentedAt, consentedAt, consentedAt);
 }
 
+// Returns the new snapshot id so feedback can point at the result it rates.
 export function saveAnalysisSnapshot({ userId, provider, analysis }) {
   const createdAt = new Date().toISOString();
-  database.prepare(`
+  return Number(database.prepare(`
     INSERT INTO analysis_snapshots
       (user_id, provider, score, metrics_json, buckets_json, genres_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -91,14 +97,26 @@ export function saveAnalysisSnapshot({ userId, provider, analysis }) {
     JSON.stringify(analysis.buckets),
     JSON.stringify(analysis.genres),
     createdAt
-  );
+  ).lastInsertRowid);
 }
 
-export function saveFeedback({ userId, targetType, targetId, rating }) {
+export function saveFeedback({ userId, targetType, targetId, rating, snapshotId = null }) {
   database.prepare(`
-    INSERT INTO feedback (user_id, target_type, target_id, rating, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(userId, targetType, targetId, rating, new Date().toISOString());
+    INSERT INTO feedback (user_id, target_type, target_id, rating, created_at, snapshot_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(userId, targetType, targetId, rating, new Date().toISOString(), snapshotId);
+}
+
+// "Does the score feel too low / right / too high?" answers joined with the
+// result they were given for. Only the latest answer per snapshot counts.
+export function listScoreFeedback() {
+  return database.prepare(`
+    SELECT f.rating, s.score, s.metrics_json
+    FROM feedback AS f
+    JOIN analysis_snapshots AS s ON s.id = f.snapshot_id
+    WHERE f.target_type = 'score'
+      AND f.id = (SELECT MAX(id) FROM feedback WHERE snapshot_id = f.snapshot_id AND target_type = 'score')
+  `).all().map((row) => ({ rating: row.rating, score: row.score, metrics: JSON.parse(row.metrics_json) }));
 }
 
 export function deleteUserData(userId) {
