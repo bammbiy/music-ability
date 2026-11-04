@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteAlbumRating, deleteUserData, getAlbumCacheStats, getLatestScores, getUserRatings, hasConsent, saveAlbumRating, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
+import { checkDatabase, closeDatabase, deleteAlbumRating, deleteUserData, getAlbumCacheStats, getLatestScores, getUserRatings, hasConsent, saveAlbumRating, saveAnalysisSnapshot, saveConsent, saveFeedback } from "./store.js";
 import { albumKey } from "./acclaim/score.js";
 import { buildAnalysis } from "./analysis.js";
 import { createAcclaimService } from "./acclaim/index.js";
@@ -115,6 +115,17 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { error: "rate_limited" }, 429);
     }
 
+    // For the deploy platform's health check. Says nothing about configuration.
+    if (url.pathname === "/healthz") {
+      let ok = false;
+      try {
+        ok = checkDatabase();
+      } catch (error) {
+        console.error("health check failed", error);
+      }
+      return sendJson(res, { ok }, ok ? 200 : 503);
+    }
+
     if (url.pathname === "/api/status") {
       return sendJson(res, {
         spotifyConfigured: Boolean(SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET),
@@ -187,6 +198,20 @@ setInterval(sweepExpiredState, 60 * 1000).unref();
 server.listen(PORT, () => {
   console.log(`Music Ability running at http://localhost:${PORT}`);
 });
+
+// Containers stop with SIGTERM: finish open requests, then close the database
+// so the SQLite write-ahead log is folded back into the main file.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, () => {
+    console.log(`${signal} received, shutting down`);
+    server.close(() => {
+      closeDatabase();
+      process.exit(0);
+    });
+    server.closeIdleConnections?.();
+    setTimeout(() => process.exit(1), 10_000).unref();
+  });
+}
 
 async function handleLogin(req, res) {
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {

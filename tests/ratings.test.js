@@ -83,3 +83,15 @@ test("user ratings count even before open data is collected or when collection i
   const result = service.lookup([{ artist: "Fresh", album: "Album" }]);
   assert.equal(result.summaries.get("fresh::album").communityVotes, 2);
 });
+
+test("a backup is a complete, readable copy of the live database", async () => {
+  consent("backup-user");
+  store.saveAlbumRating({ userId: "backup-user", key: "backup::album", artist: "Backup", album: "Album", rating: 6 });
+  const target = join(dir, "backup.sqlite");
+  store.backupDatabase(target);
+  const { DatabaseSync } = await import("node:sqlite");
+  const copy = new DatabaseSync(target);
+  assert.equal(copy.prepare("SELECT rating FROM album_ratings WHERE user_id = 'backup-user'").get().rating, 6);
+  copy.close();
+  assert.equal(store.checkDatabase(), true);
+});

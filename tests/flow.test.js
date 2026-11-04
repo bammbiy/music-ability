@@ -298,6 +298,12 @@ test("expiring Spotify tokens are refreshed", async () => {
   assert.ok(fake.refreshes > before);
 });
 
+test("the health check answers without exposing configuration", async () => {
+  const response = await fetch(`${base}/healthz`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
+});
+
 test("requests from other sites and bad callbacks are rejected", async () => {
   const response = await fetch(`${base}/api/consent`, { method: "POST", headers: { Origin: "https://evil.example" } });
   assert.equal(response.status, 403);

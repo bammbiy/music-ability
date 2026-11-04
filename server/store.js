@@ -221,3 +221,17 @@ export function hasConsent(userId) {
   if (!userId) return false;
   return Boolean(database.prepare("SELECT 1 FROM users WHERE user_id = ?").get(userId));
 }
+
+// Health check for the deploy platform: the database file is open and answers.
+export function checkDatabase() {
+  return database.prepare("SELECT 1 AS ok").get().ok === 1;
+}
+
+// Consistent copy of the live database, safe while the server is running.
+export function backupDatabase(target) {
+  database.prepare("VACUUM INTO ?").run(target);
+}
+
+export function closeDatabase() {
+  database.close();
+}
